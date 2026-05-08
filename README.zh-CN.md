@@ -4,7 +4,7 @@
 
 # Hermit Agent · 寄居蟹 Agent
 
-**Anthropic 封锁了 Openclaw 龙虾，封锁了第三方订阅，所以只好做一只寄居蟹，把 agent 寄居在 Anthropic 的订阅上。寄居蟹 agent，融合了 Claude Code、Openclaw、Hermes Agent 三大 Harness 的优点，简单好用。**
+**Anthropic 封锁了第三方订阅，所以做一只寄居蟹，把 agent 寄居在已有的 AI 编程 Host 上。默认寄居 [Claude Code](https://docs.claude.com/claude-code)；用 `--host codex` 也能寄居在 [OpenAI Codex CLI](https://developers.openai.com/codex/cli) 上，直接用你的 ChatGPT 订阅替代 API 花费。融合 Claude Code、Openclaw、Hermes Agent 三大 Harness 的优点，一行命令上手。**
 
 [English](README.md) · [中文](README.zh-CN.md)
 
@@ -12,7 +12,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
 [![Node 18+](https://img.shields.io/badge/node-18%2B-green?style=flat-square)](https://nodejs.org)
 [![macOS](https://img.shields.io/badge/platform-macOS-blue?style=flat-square)](https://www.apple.com/macos/)
-[![Claude Code](https://img.shields.io/badge/Claude_Code-required-orange?style=flat-square)](https://docs.claude.com/claude-code)
+[![Claude Code](https://img.shields.io/badge/host-Claude_Code-orange?style=flat-square)](https://docs.claude.com/claude-code)
+[![Codex CLI](https://img.shields.io/badge/host-Codex_CLI-black?style=flat-square)](https://developers.openai.com/codex/cli)
 
 </div>
 
@@ -20,9 +21,12 @@
 
 ## 融合三大框架
 
+默认寄居 Claude Code，v0.1.38+ 起也支持 Codex CLI 作为 sibling host（详见 [Host 选择](#host-选择claude-code-还是-codex)）。
+
 | 借鉴自 | 带来了什么 |
 |---|---|
-| **[Claude Code](https://docs.claude.com/claude-code)** | 壳本体。每个 agent 字面意义上就跑在 `claude --dangerously-skip-permissions` 里。Plugin、MCP、Tool、Hook 全部原生复用，什么都不重实现。 |
+| **[Claude Code](https://docs.claude.com/claude-code)** | 默认壳本体。每个 agent 字面意义上就跑在 `claude --dangerously-skip-permissions` 里。Plugin、MCP、Tool、Hook 全部原生复用，什么都不重实现。 |
+| **[Codex CLI](https://developers.openai.com/codex/cli)** _（用 `--host codex` opt-in）_ | 备选壳本体，让寄居蟹直接搭 ChatGPT 订阅。Codex 没有 `--channels` 这种 plugin push 模型，所以 hermit 自带 `scripts/tg-bridge.py` Python daemon，把 Telegram 消息翻译成 `codex exec` 调用。 |
 | **OpenClaw** | 人格文件：`SOUL / IDENTITY / USER / AGENTS / TOOLS / MEMORY.md`；自管浏览器模式。塑形了 `scripts/chrome-launcher.sh`、`scripts/browser-lock.sh`，每个 agent 一个独立 Chrome profile 配 CDP 复用，外加 stealth 包装的 Playwright 套路。 |
 | **Hermas Agent** | 自主进化模式和记忆模块设计。`SOUL.md` + `MEMORY.md` + 每日 `memory/YYYY-MM-DD.md` 日志 + 做梦式知识固化，全都继承自它。 |
 
@@ -30,10 +34,20 @@
 
 ## 30 秒上手
 
+**默认（Claude Code host）：**
+
 ```bash
 # 前置：Claude Code 已装并登录，Node 18+，brew install tmux jq，bun 已装
 npx create-hermit-agent
 cd asst && ./start.sh
+```
+
+**Codex host**（用你的 ChatGPT 订阅，不烧 API）：
+
+```bash
+# 前置：codex CLI 已装并 codex login，Node 18+，brew install tmux jq，python3
+npx create-hermit-agent my-agent --host codex
+cd my-agent && ./start.sh
 ```
 
 > **Linux**：流程一样，把 `brew install tmux jq` 换成 `sudo apt install tmux jq curl`（或对应包管理器），并跑一次 `loginctl enable-linger $USER` 让 systemd-user timer 跨登出存活。Linux scaffold **故意精简**——不带 browser 和 image-safety 层。详见 [安装](#安装) 和 [FAQ](#faq) 章节。
@@ -49,14 +63,45 @@ cd asst && ./start.sh
 
 | 能力 | 细节 |
 |---|---|
-| **人设** | 每次启动都会读 `SOUL / IDENTITY / USER / AGENTS / TOOLS / MEMORY.md`。改文件即改 agent。 |
+| **Host 选择** | `--host claude`（默认）或 `--host codex`。Claude flavor 走 `@claude-plugins-official/telegram` 插件 + 完整 Claude Code 壳。Codex flavor 走 Python Telegram bridge daemon + ChatGPT 订阅的 `codex exec`。两边人设文件一致、记忆模式一致、hook 布局一致。 |
+| **人设** | 每次启动都会读 `SOUL / IDENTITY / USER / AGENTS / TOOLS / MEMORY.md`。改文件即改 agent。Codex 原生自动加载 `AGENTS.md`；Claude Code 通过 `CLAUDE.md` 入口加载。 |
 | **长期记忆** | 每日日志写到 `memory/YYYY-MM-DD.md`，长期策展在 `MEMORY.md`，重启跨越不丢。 |
-| **Telegram I/O** | 走 `@claude-plugins-official/telegram` 原生 reply / react / edit / 下载附件。群聊礼仪内置。想触发内部命令直接说人话——「压缩上下文」/「换 opus」/「重启」/「查状态」——agent 自己路由到对应 Claude Code 命令。不用 sigil 前缀。 |
-| **Lifecycle** | `start.sh` + `restart.sh` 把 agent 包在命名的 `tmux` session 里。Context 跨 100k / 200k / … / 950k 阈值、以及工具调用密集时主动 push 告警。 |
-| **定时任务** | 三层——session-only 的 `cron` skill、跨重启的 `HEARTBEAT.md`、OS 持久的 `launchd` plist。 |
-| **浏览器** | 独立 Chrome profile + CDP + Playwright + stealth-init 反检测。 |
-| **多 Agent** | `provision-agent` skill 在 `../<name>/` 生成 sibling 并给它独立 bot token。可选每 10 分钟状态 digest 的 LaunchAgent。 |
-| **安全** | 图片 Read 前强制过 `safe-image.sh` 缩图（长边 ≤ 1800px）。Token 存在 mode 600 的 repo 外文件。Stop hook 阻止“收到 DM 没回就结束 turn”。PreToolUse hook 把 agent 出站 Telegram reply 里的 markdown 语法洗掉，避免 `**粗体**` / `# 标题` 直接作为字面量字符到用户对话框里。 |
+| **Telegram I/O** | _Claude flavor_：走 `@claude-plugins-official/telegram` 原生 reply / react / edit / 下载附件，说人话直接路由到 slash 命令（「压缩上下文」→ `/compact`、「重启」→ `restart.sh`）。_Codex flavor_：Python bridge daemon 长 poll `getUpdates`，每条消息跑一次 `codex exec [resume <thread>]`，文本 + 自动检测的生成图片（`sendPhoto`）一并回。Daemon 层 admin 命令：`/help` `/status` `/reset` `/restart`。 |
+| **Lifecycle** | `start.sh` + `restart.sh` 把 agent 包在命名的 `tmux` session 里——`claude-<name>`（claude flavor）或 `codex-<name>`（codex flavor）。两边都跨重启保留状态。 |
+| **定时任务** | 三层——session-only 的 `cron` skill、跨重启的 `HEARTBEAT.md`、OS 持久的 `launchd` plist。Codex flavor 用 `scripts/run-cron.sh` 包 `codex exec` 在 `with-timeout.sh 1200` 里。 |
+| **浏览器** | 独立 Chrome profile + CDP + Playwright + stealth-init 反检测（claude flavor）。Codex flavor 直接用其 bundle 的 `browser-use` plugin。 |
+| **多 Agent** | `provision-agent` skill 在 `../<name>/` 生成 sibling 并给它独立 bot token。skill 识别「用 codex / 用 ChatGPT 订阅」并透传 `--host codex`，默认仍是 claude。可选每 10 分钟状态 digest 的 LaunchAgent。 |
+| **安全** | 图片 Read 前强制过 `safe-image.sh` 缩图（长边 ≤ 1800px）。Token 存在 mode 600 的 repo 外文件（claude flavor 在 `~/.claude/channels/`，codex flavor 在 workspace 的 `.env`）。_Claude flavor_：Stop hook 阻止"收到 DM 没回就结束 turn"，PreToolUse hook 洗 markdown。_Codex flavor_：等价守护通过 `scripts/hooks/{boot,pre-run,post-run}.sh` 实现——boot 触发 `FIRST_RUN.md` 欢迎、pre-run 对检测到的图片路径跑 `safe-image.sh`、post-run 洗 markdown + 写 daily log。 |
+
+---
+
+## Host 选择：Claude Code 还是 Codex
+
+CLI 的 `--host` 参数选 host，默认 `claude`。
+
+```bash
+npx create-hermit-agent my-agent                 # claude（默认）
+npx create-hermit-agent my-agent --host codex    # codex
+```
+
+| | Claude flavor (`--host claude`) | Codex flavor (`--host codex`) |
+|---|---|---|
+| **底层 CLI** | `claude --dangerously-skip-permissions --channels plugin:telegram@…`（长跑 REPL，Telegram 消息通过 plugin 的 `--channels` 流入） | `codex exec --json --output-last-message <file> [resume <thread_id>]`（每轮一次性调用，daemon 协调） |
+| **成本模型** | Anthropic API（claude.ai Pro 用 CLI + 按 token 计费 plugin session） | ChatGPT 订阅（Plus / Pro / Team / Enterprise——codex CLI 直接消费订阅的请求 budget） |
+| **Telegram 桥接** | 原生——官方 `@claude-plugins-official/telegram` plugin 跑成 claude session 内的 `bun` MCP 子进程，把 Telegram 更新直接 push 到 REPL 当新 turn | 外置 Python daemon（`scripts/tg-bridge.py`，~250 行，stdlib only）长 poll `getUpdates`，每轮 `codex exec`，把 `--output-last-message` 通过 `sendMessage` 回。还自动检测 `~/.codex/generated_images/<thread>/` 里新增 png 用 `sendPhoto` 转发。 |
+| **Lifecycle hooks** | Claude Code 原生 hook：`SessionStart` / `Stop` / `PreToolUse` / `UserPromptSubmit` 在 `.claude/settings.json` 里声明 | `scripts/hooks/{boot,pre-run,post-run}.sh` 由 bridge daemon 调用。boot ≈ SessionStart，pre-run ≈ UserPromptSubmit，post-run ≈ Stop。pre-run exit ≠ 0 中止本轮；post-run stdout 替换 reply（markdown 清理 / redaction） |
+| **Slash / admin 命令** | 中英文人话路由经 `scripts/exec-cli-command.sh`（「压缩」→ `/compact`、「重启」→ `restart.sh $(cat agent.pid)`） | Daemon 直接拦截 `/help` `/status` `/reset` `/restart`，不调 codex |
+| **Skills** | 自动从 `.claude/skills/` 加载（Claude Code 原生 skill protocol） | 文档约定写在 `scripts/skills/`（暂无 auto-loader，agent 主动读 `SKILLS.md` 或经 shell 调用）。Codex 自带的 `browser-use` / `documents` / `presentations` / `spreadsheets` 等 plugin 也并行可用。 |
+| **MCP server** | 每 agent 在 `.claude/settings.local.json` | 每用户在 `~/.codex/config.toml` `[mcp_servers.<id>]` |
+| **Cron / scheduler** | `claude --dangerously-skip-permissions -p "<prompt>"`（注意：`-p` 模式下 plugin sync 不 fire） | `scripts/run-cron.sh <task>` 读 `cron/<task>.md`，`codex exec` 在 `with-timeout.sh 1200` 下，结果直接 curl 回 Telegram |
+| **状态** | `agent.pid` + Claude Code session 在 `~/.claude/projects/…` | `state/thread.txt`（当前 codex thread UUID）、`state/update_id.txt`（最后处理的 Telegram update_id）——都在 workspace 根，跨 restart 安全 |
+
+什么时候选哪个：
+
+- **Claude** —— 你想用官方 `--channels` 集成、slash 命令、完整 Claude Code skill 生态，并且能接受按 token 付费。
+- **Codex** —— 你已经付了 ChatGPT 订阅，想把这个订阅 redirect 到 agent workload。能接受 polling-bridge 模型（每轮都是一次性 `codex exec`，通过 `~/.codex/sessions/` 持久化 thread）。不需要 Claude 专属的 plugin marketplace。
+
+混用没问题——一台机器可以同时跑两种 flavor，各自占自己的 `tmux` session 和 bot token。
 
 ---
 
@@ -87,12 +132,19 @@ cd asst && ./start.sh
 
 ## 安装
 
-前置依赖（macOS）：
+前置依赖（macOS，**claude flavor**）：
 
 - [Claude Code](https://docs.claude.com/claude-code)——已装并登录（`claude login`）
 - Node ≥ 18
 - `brew install tmux jq`
 - `curl -fsSL https://bun.sh/install | bash`
+
+前置依赖（macOS，**codex flavor**）：
+
+- [Codex CLI](https://developers.openai.com/codex/cli)——已装并登录（`codex login`，用 ChatGPT 帐号；`codex login status` 应返回 "Logged in using ChatGPT"）
+- Node ≥ 18
+- `python3`（系统自带或 `brew install python3`）
+- `brew install tmux jq curl`
 
 前置依赖（Linux，在 Ubuntu 22.04 上测过）：
 
@@ -102,23 +154,31 @@ cd asst && ./start.sh
 - `curl -fsSL https://bun.sh/install | bash`
 - 服务器一次性配置：`loginctl enable-linger $USER`，让 `systemd --user` timer 跨登出存活
 
-Linux scaffold **不包含 browser 层**（chrome-launcher、browser-lock、playwright-mcp）和 **image-safety 层**（safe-image、pre-read-image hook）。这两块是 macOS 形状的（sips、`.app` 路径），v1 暂不跨平台移植——CLI 在 Linux 上 scaffold 时会自动 prune 这些脚本以及 `settings.json` / `settings.local.json` 里相关的 hook / MCP server / 权限条目。其他功能（Telegram plugin、人格、记忆、调度、多 agent 状态汇报）在两边都一样。
+Linux scaffold **不包含 browser 层**（chrome-launcher、browser-lock、playwright-mcp）和 **image-safety 层**（safe-image、pre-read-image hook）。这两块是 macOS 形状的（sips、`.app` 路径），v1 暂不跨平台移植——CLI 在 Linux 上 scaffold 时会自动 prune 这些脚本以及 `settings.json` / `settings.local.json` 里相关的 hook / MCP server / 权限条目。其他功能（Telegram plugin、人格、记忆、调度、多 agent 状态汇报）在两边都一样。**Codex flavor 在 Linux 上**也支持但测试覆盖较少——遇到问题欢迎提 issue。
 
 脚手架：
 
 ```bash
+# Claude flavor（默认）
 npx create-hermit-agent
+
+# Codex flavor
+npx create-hermit-agent my-agent --host codex
 ```
 
-CLI 会问你要 Telegram bot token（[@BotFather](https://t.me/BotFather)）和你自己的 Telegram user ID（[@userinfobot](https://t.me/userinfobot)），然后生成 `./asst/`，以 project scope 安装 telegram plugin，把 token 写到 mode 600 的 `~/.claude/channels/telegram-asst/.env`。
+CLI 会问你要 Telegram bot token（[@BotFather](https://t.me/BotFather)）和你自己的 Telegram user ID（[@userinfobot](https://t.me/userinfobot)）。
+
+- **Claude flavor**：生成 `./asst/`，以 project scope 安装 telegram plugin，把 token 写到 mode 600 的 `~/.claude/channels/telegram-asst/.env`。
+- **Codex flavor**：生成 `./my-agent/`，把 token 和 chat_id 写在 mode 600 的 workspace `.env` 里，复制 Python bridge daemon 和 hooks。不装 plugin——Telegram 桥是自包含的 Python 脚本。AGENTS.md 在每次 `codex exec` 时自动加载（Codex 原生行为）。
 
 启动：
 
 ```bash
-cd asst && ./start.sh
+cd asst && ./start.sh             # claude flavor
+cd my-agent && ./start.sh         # codex flavor
 ```
 
-Agent 现在跑在一个叫 `claude-asst` 的 detached tmux session 里。DM 你的 bot 即可。
+Agent 跑在一个 detached tmux session 里——`claude-<name>`（claude flavor）或 `codex-<name>`（codex flavor）。DM 你的 bot 即可。
 
 ---
 

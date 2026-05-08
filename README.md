@@ -4,7 +4,7 @@
 
 # Hermit Agent
 
-**Not a standalone agent framework — a hermit crab that lodges inside Claude Code. One command bootstraps a Telegram-connected Claude Code agent with persona, long-term memory, scheduler, and browser automation.**
+**Not a standalone agent framework — a hermit crab that lodges inside an existing AI coding host. One command bootstraps a Telegram-connected agent with persona, long-term memory, scheduler, and browser automation. Default host is [Claude Code](https://docs.claude.com/claude-code); pass `--host codex` to lodge inside [OpenAI Codex CLI](https://developers.openai.com/codex/cli) and use a ChatGPT subscription instead of API spend.**
 
 [English](README.md) · [中文](README.zh-CN.md)
 
@@ -12,7 +12,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
 [![Node 18+](https://img.shields.io/badge/node-18%2B-green?style=flat-square)](https://nodejs.org)
 [![macOS](https://img.shields.io/badge/platform-macOS-blue?style=flat-square)](https://www.apple.com/macos/)
-[![Claude Code](https://img.shields.io/badge/Claude_Code-required-orange?style=flat-square)](https://docs.claude.com/claude-code)
+[![Claude Code](https://img.shields.io/badge/host-Claude_Code-orange?style=flat-square)](https://docs.claude.com/claude-code)
+[![Codex CLI](https://img.shields.io/badge/host-Codex_CLI-black?style=flat-square)](https://developers.openai.com/codex/cli)
 
 </div>
 
@@ -20,11 +21,12 @@
 
 ## Why a hermit crab?
 
-Claude Code closes its third-party subscription surface, so I built an agent that **lodges inside Claude Code itself** — fusing the best ideas from three agent-harness frameworks.
+Claude Code closes its third-party subscription surface, so I built an agent that **lodges inside its host CLI itself** — fusing the best ideas from three agent-harness frameworks. The default host is Claude Code; v0.1.38+ also supports Codex CLI as a sibling host (see [Host choice](#host-choice-claude-code-or-codex)).
 
 | Borrowed from | What it contributed |
 |---|---|
-| **[Claude Code](https://docs.claude.com/claude-code)** | The shell. Every agent literally runs inside `claude --dangerously-skip-permissions`. Plugins, MCP, tools, hooks — all native, nothing reimplemented. |
+| **[Claude Code](https://docs.claude.com/claude-code)** | The default shell. Every agent literally runs inside `claude --dangerously-skip-permissions`. Plugins, MCP, tools, hooks — all native, nothing reimplemented. |
+| **[Codex CLI](https://developers.openai.com/codex/cli)** _(opt-in via `--host codex`)_ | Alternative shell that piggybacks on a ChatGPT subscription. The hermit ships its own `scripts/tg-bridge.py` Python daemon that translates Telegram updates into `codex exec` calls, since Codex has no `--channels`-style plugin model. |
 | **OpenClaw** | Self-managed-browser pattern. Shaped `scripts/chrome-launcher.sh`, `scripts/browser-lock.sh`, per-agent Chrome profile + CDP reuse, stealth-wrapped Playwright. |
 | **Hermas Agent** | Autonomous-evolution pattern and memory-module design. `SOUL.md` + `MEMORY.md` + daily `memory/YYYY-MM-DD.md` logs + dream-style consolidation all inherited. |
 
@@ -32,10 +34,20 @@ Claude Code closes its third-party subscription surface, so I built an agent tha
 
 ## 30-second quickstart
 
+**Default (Claude Code host):**
+
 ```bash
 # Prereqs: Claude Code installed & logged in, Node 18+, brew install tmux jq, bun installed
 npx create-hermit-agent
 cd asst && ./start.sh
+```
+
+**Codex host** (uses your ChatGPT subscription, no API spend):
+
+```bash
+# Prereqs: codex CLI installed & `codex login` done, Node 18+, brew install tmux jq, python3
+npx create-hermit-agent my-agent --host codex
+cd my-agent && ./start.sh
 ```
 
 > **Linux**: same flow, with `sudo apt install tmux jq curl` (or your distro's equivalent) and `loginctl enable-linger $USER` for systemd-user timers. Linux scaffolds ship a deliberately reduced surface — no browser, no image-safety layer. See the [Install](#install) and [FAQ](#faq) sections.
@@ -51,14 +63,45 @@ Open Telegram, DM the bot you just registered with @BotFather. First DM triggers
 
 | Capability | Detail |
 |---|---|
-| **Persona** | `SOUL / IDENTITY / USER / AGENTS / TOOLS / MEMORY.md` loaded every session. Edit the files → edit the agent. |
+| **Host choice** | `--host claude` (default) or `--host codex`. Claude flavor uses the `@claude-plugins-official/telegram` plugin and the full Claude Code shell. Codex flavor uses a Python Telegram bridge daemon and your ChatGPT subscription via `codex exec`. Same persona files, same memory pattern, same hook layout. |
+| **Persona** | `SOUL / IDENTITY / USER / AGENTS / TOOLS / MEMORY.md` loaded every session. Edit the files → edit the agent. Codex auto-loads `AGENTS.md` natively; Claude Code loads via `CLAUDE.md`. |
 | **Long-term memory** | Daily logs at `memory/YYYY-MM-DD.md`, curated long-term at `MEMORY.md`. Survives restarts. |
-| **Telegram I/O** | Native reply / react / edit / attachment download via `@claude-plugins-official/telegram`. Group-chat etiquette built in. Just say it in plain English or Chinese — "compact the context" / "压缩上下文" / "switch to opus" / "restart" / "查状态" — and the agent routes to the right Claude Code command. No sigil required. |
-| **Lifecycle** | `start.sh` + `restart.sh` wrap the agent in a named `tmux` session. Push alerts when context crosses 100k / 200k / ... / 950k thresholds, or when tool use gets chatty. |
-| **Scheduler** | Three tiers — session-only `cron` skill, cross-restart `HEARTBEAT.md`, OS-durable `launchd` plists. |
-| **Browser** | Dedicated Chrome profile + CDP + Playwright + stealth-init anti-detection. |
-| **Multi-agent** | `provision-agent` skill spawns siblings at `../<name>/` with their own bot tokens. Optional 10-min digest LaunchAgent. |
-| **Safety** | Images forced through `safe-image.sh` resize (≤1800px long edge). Tokens stored at mode 600 outside the repo. Stop hook blocks turn-end if a Telegram DM got no reply. PreToolUse hook strips markdown from outbound Telegram replies so stray `**bold**` / `# headers` don't land as literal noise in the chat. |
+| **Telegram I/O** | _Claude flavor_: native reply / react / edit / attachment download via `@claude-plugins-official/telegram`. Plain English or Chinese routes to slash commands ("压缩上下文" → `/compact`, "重启" → `restart.sh`). _Codex flavor_: Python bridge daemon polls `getUpdates`, runs `codex exec [resume <thread>]` per turn, posts text + auto-detected generated images via `sendPhoto`. Daemon-level admin commands: `/help` `/status` `/reset` `/restart`. |
+| **Lifecycle** | `start.sh` + `restart.sh` wrap the agent in a named `tmux` session — `claude-<name>` (claude flavor) or `codex-<name>` (codex flavor). Both flavors persist state across restarts. |
+| **Scheduler** | Three tiers — session-only `cron` skill, cross-restart `HEARTBEAT.md`, OS-durable `launchd` plists. Codex flavor uses `scripts/run-cron.sh` wrapping `codex exec` with `with-timeout.sh 1200`. |
+| **Browser** | Dedicated Chrome profile + CDP + Playwright + stealth-init anti-detection (claude flavor). Codex flavor relies on the bundled `browser-use` plugin instead. |
+| **Multi-agent** | `provision-agent` skill spawns siblings at `../<name>/` with their own bot tokens. The skill recognizes "用 codex / 用 ChatGPT 订阅" and passes `--host codex` through; default stays claude. Optional 10-min digest LaunchAgent. |
+| **Safety** | Images forced through `safe-image.sh` resize (≤1800px long edge). Tokens stored at mode 600 outside the repo. _Claude flavor_: Stop hook blocks turn-end if a Telegram DM got no reply; PreToolUse hook strips markdown from outbound replies. _Codex flavor_: equivalent guardrails via `scripts/hooks/{boot,pre-run,post-run}.sh` — boot fires `FIRST_RUN.md`, pre-run runs `safe-image.sh` on detected paths, post-run strips markdown + writes daily log. |
+
+---
+
+## Host choice: Claude Code or Codex
+
+Pass `--host` to the CLI. Default is `claude`.
+
+```bash
+npx create-hermit-agent my-agent                 # claude (default)
+npx create-hermit-agent my-agent --host codex    # codex
+```
+
+| | Claude flavor (`--host claude`) | Codex flavor (`--host codex`) |
+|---|---|---|
+| **Underlying CLI** | `claude --dangerously-skip-permissions --channels plugin:telegram@…` (long-running REPL, Telegram messages stream in via the plugin's `--channels` channel) | `codex exec --json --output-last-message <file> [resume <thread_id>]` (one-shot per turn, daemon orchestrates) |
+| **Cost model** | Anthropic API tokens (claude.ai Pro for the CLI plus per-token billing for plugin sessions) | ChatGPT subscription (Plus / Pro / Team / Enterprise — codex CLI consumes the subscription's request budget directly) |
+| **Telegram bridge** | Native — the official `@claude-plugins-official/telegram` plugin runs as a `bun` MCP subprocess inside the claude session and pushes Telegram updates straight into the REPL as new turns | External Python daemon (`scripts/tg-bridge.py`, ~250 lines, stdlib-only) long-polls `getUpdates`, invokes `codex exec` per turn, posts captured `--output-last-message` back via `sendMessage`. Auto-detects new pngs in `~/.codex/generated_images/<thread>/` and forwards via `sendPhoto`. |
+| **Lifecycle hooks** | Claude Code's native hooks: `SessionStart` / `Stop` / `PreToolUse` / `UserPromptSubmit` declared in `.claude/settings.json` | `scripts/hooks/{boot,pre-run,post-run}.sh` invoked by the bridge daemon. boot ≈ SessionStart, pre-run ≈ UserPromptSubmit, post-run ≈ Stop. pre-run exit ≠ 0 aborts the turn; post-run stdout replaces the reply (markdown strip / redaction). |
+| **Slash / admin commands** | Plain English / Chinese routes via `scripts/exec-cli-command.sh` ("压缩" → `/compact`, "重启" → `restart.sh $(cat agent.pid)`) | Daemon intercepts `/help` `/status` `/reset` `/restart` directly without invoking codex |
+| **Skills** | Auto-loaded from `.claude/skills/` (Claude Code's native skill protocol) | Documented in `scripts/skills/` (no auto-loader yet — agent reads `SKILLS.md` proactively or invokes via shell). Codex's bundled plugins (`browser-use`, `documents`, `presentations`, `spreadsheets`) are available alongside. |
+| **MCP servers** | Per-agent in `.claude/settings.local.json` | Per-user in `~/.codex/config.toml` `[mcp_servers.<id>]` |
+| **Cron / scheduler** | `claude --dangerously-skip-permissions -p "<prompt>"` (caveat: plugin sync doesn't fire under `-p`) | `scripts/run-cron.sh <task>` reads `cron/<task>.md`, `codex exec` it under `with-timeout.sh 1200`, posts result to Telegram via direct curl |
+| **State** | `agent.pid` + Claude Code session in `~/.claude/projects/…` | `state/thread.txt` (current codex thread UUID), `state/update_id.txt` (last Telegram update_id) — both in workspace root, restart-safe |
+
+When to pick which:
+
+- **Claude** — you want the official `--channels` integration, slash commands, the full Claude Code skill ecosystem, and you're willing to pay per-token.
+- **Codex** — you already pay for ChatGPT and want to redirect that subscription at agent workloads. You're OK with the polling-bridge model (every turn is a fresh `codex exec` invocation; threads are persisted via `~/.codex/sessions/`). You don't need the Claude-specific plugin marketplace.
+
+Mixing is fine — one machine can run both flavors side-by-side. Each gets its own `tmux` session and its own bot token.
 
 ---
 
@@ -89,14 +132,21 @@ Higher-res SVG: [assets/arch.svg](assets/arch.svg).
 
 ## Install
 
-Prereqs (macOS):
+Prereqs (macOS, **claude flavor**):
 
 - [Claude Code](https://docs.claude.com/claude-code) — installed and logged in (`claude login`)
 - Node ≥ 18
 - `brew install tmux jq`
 - `curl -fsSL https://bun.sh/install | bash`
 
-Prereqs (Linux, tested on Ubuntu 22.04):
+Prereqs (macOS, **codex flavor**):
+
+- [Codex CLI](https://developers.openai.com/codex/cli) — installed and logged in (`codex login`, ChatGPT account; `codex login status` should say "Logged in using ChatGPT")
+- Node ≥ 18
+- `python3` (system or via `brew install python3`)
+- `brew install tmux jq curl`
+
+Prereqs (Linux, tested on Ubuntu 22.04, claude flavor):
 
 - [Claude Code](https://docs.claude.com/claude-code) — installed and logged in
 - Node ≥ 18
@@ -104,23 +154,31 @@ Prereqs (Linux, tested on Ubuntu 22.04):
 - `curl -fsSL https://bun.sh/install | bash`
 - One-time on a server: `loginctl enable-linger $USER` so `systemd --user` timers survive logout
 
-The Linux scaffold ships **without the browser layer** (chrome-launcher, browser-lock, playwright-mcp) and **without the image-safety layer** (safe-image, pre-read-image hook). Both are macOS-shaped (sips, .app paths) and porting them is out of scope for v1 — the CLI strips them automatically on Linux. Everything else (Telegram plugin, persona, memory, scheduling, multi-agent status digest) works the same.
+The Linux scaffold ships **without the browser layer** (chrome-launcher, browser-lock, playwright-mcp) and **without the image-safety layer** (safe-image, pre-read-image hook). Both are macOS-shaped (sips, .app paths) and porting them is out of scope for v1 — the CLI strips them automatically on Linux. Everything else (Telegram plugin, persona, memory, scheduling, multi-agent status digest) works the same. **Codex flavor on Linux** is also supported but tested less thoroughly — file an issue if anything breaks.
 
 Scaffold:
 
 ```bash
+# Claude flavor (default)
 npx create-hermit-agent
+
+# Codex flavor
+npx create-hermit-agent my-agent --host codex
 ```
 
-The CLI asks for a Telegram bot token ([@BotFather](https://t.me/BotFather)) and your own Telegram user ID ([@userinfobot](https://t.me/userinfobot)). Then it creates `./asst/`, installs the Telegram plugin at project scope, and writes the token to `~/.claude/channels/telegram-asst/.env` (mode 600).
+The CLI asks for a Telegram bot token ([@BotFather](https://t.me/BotFather)) and your own Telegram user ID ([@userinfobot](https://t.me/userinfobot)).
+
+- **Claude flavor**: creates `./asst/`, installs the Telegram plugin at project scope, writes the token to `~/.claude/channels/telegram-asst/.env` (mode 600).
+- **Codex flavor**: creates `./my-agent/`, writes `.env` (mode 600) with the token and chat_id directly inside the workspace, copies the Python bridge daemon and hooks. No plugin install — the Telegram bridge is a self-contained Python script. AGENTS.md auto-loads on every `codex exec` (Codex's native behavior).
 
 Start:
 
 ```bash
-cd asst && ./start.sh
+cd asst && ./start.sh             # claude flavor
+cd my-agent && ./start.sh         # codex flavor
 ```
 
-The agent now runs in a detached `tmux` session named `claude-asst`. DM the bot.
+The agent runs in a detached `tmux` session named `claude-<name>` (claude flavor) or `codex-<name>` (codex flavor). DM the bot.
 
 ---
 
