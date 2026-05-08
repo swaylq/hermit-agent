@@ -10,6 +10,12 @@ A **doppel** shares the parent agent's workspace via symlinks (SOUL/USER/AGENTS/
 
 If the user wants a **brand-new agent** with its own workspace, use `provision-agent` (npx create-hermit-agent without `--clone-of`) instead.
 
+## Host inheritance
+
+Cloning preserves the parent's host. If you (the running agent) are claude-flavored, your doppel is claude-flavored. If parent is codex-flavored, the clone is codex-flavored. The CLI infers host from the parent's directory structure — there is no `--host` flag in clone mode.
+
+**Codex-flavored clones are not yet supported by `--clone-of`** (the symlink-based clone pattern is built around Claude Code's `.claude/` layout). If a codex-hermit user asks for a doppel, run a fresh `provision-agent --host codex` instead and tell them it's a fresh hermit, not a clone.
+
 **Master vs worker rule.** Doppels are always **workers** — never masters. The master of this machine is the first hermit installed (typically `asst`), which owns the status-reporter LaunchAgent. The CLI's `--clone-of` mode skips that LaunchAgent entirely, so you can't accidentally spawn a second master via this skill. A worker can be a clone of the master, of another worker, or of another doppel's parent — the relationship that matters is workspace inheritance, not master/worker hierarchy.
 
 ## Concept

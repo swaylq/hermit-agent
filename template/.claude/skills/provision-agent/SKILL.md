@@ -31,6 +31,19 @@ Every additional hermit the user needs, they ask *you* (the master) for via Tele
 
 New agents land as **siblings** — in the parent directory of your workspace, not inside it. Each gets its own bot token, its own `tmux` session (`claude-<name>`), and its own directory.
 
+## Host choice — claude (default) vs codex
+
+The CLI accepts `--host <claude|codex>`. **Default is `claude`** — the user gets a Claude Code hermit with the official telegram plugin, same flavor as you (asst).
+
+Use `--host codex` only when the user explicitly asks for it. Recognize phrases like:
+- "用 codex 跑" / "codex 寄居" / "codex flavor" / "codex agent"
+- "用 ChatGPT 订阅" / "用我的 ChatGPT Pro" / "save the API spend"
+- "在 codex 上跑这个新 agent"
+
+The codex flavor uses your user's ChatGPT subscription via the `codex` CLI instead of Claude API spend. It runs a separate Python Telegram bridge (no `--channels` plugin), no `bun` subprocess, no `claude plugin install` step. Persona files (SOUL/IDENTITY/USER/AGENTS/TOOLS/MEMORY), daily logs, hooks, and cron pattern are equivalent.
+
+**If the user did not say "codex" explicitly, do NOT pass `--host codex`.** Default behavior is unchanged — silently using codex when the user asked for the standard hermit would route them to a different runtime than expected.
+
 ## Arguments to collect
 
 Before running anything, you need four things from the user (ask via Telegram reply if any are missing):
@@ -40,6 +53,8 @@ Before running anything, you need four things from the user (ask via Telegram re
 3. **Persona** — one-line description: what should this agent focus on?
 4. **User chat ID** — default to this agent's own `env.TELEGRAM_CHAT_ID` (from `.claude/settings.local.json`). Only ask if the user wants the new agent to route to a different chat.
 
+(Optional 5th: **Host** — `claude` if not specified, `codex` only if explicitly requested. See "Host choice" above.)
+
 If the user gives all four in one message, proceed without re-asking. Otherwise ask only for the missing pieces.
 
 ## Invocation
@@ -47,7 +62,16 @@ If the user gives all four in one message, proceed without re-asking. Otherwise 
 Run this via Bash from your own working directory — the `../<name>` path puts the new agent next to yours without needing a `cd`:
 
 ```bash
+# Default: claude flavor
 npx create-hermit-agent "../<name>" \
+  --bot-token <token> \
+  --user-id <chat-id> \
+  --persona "<one-line>" \
+  --yes
+
+# Codex flavor (only when user asked explicitly):
+npx create-hermit-agent "../<name>" \
+  --host codex \
   --bot-token <token> \
   --user-id <chat-id> \
   --persona "<one-line>" \
@@ -56,8 +80,8 @@ npx create-hermit-agent "../<name>" \
 
 `--yes` skips the interactive prompts since you already have the values. Don't `cd ..` — the CLI resolves relative paths against your cwd, and shifting cwd has side effects on subsequent Bash calls in the same turn.
 
-The CLI will:
-1. Verify prereqs (claude CLI, tmux, bun, node ≥18, macOS).
+For **claude flavor** (default), the CLI will:
+1. Verify prereqs (claude CLI, tmux, bun, node ≥18, macOS/Linux).
 2. Validate the bot token against Telegram's `getMe`.
 3. Copy the template into `../<name>/`.
 4. Write `~/.claude/channels/telegram-<name>/.env` (token) and `access.json` (user pre-allowed so the first DM skips the pairing-code round-trip).
@@ -65,7 +89,14 @@ The CLI will:
 6. `npm install` Playwright inside the new agent.
 7. Print next steps.
 
-Typical wall-clock: 20–30 seconds.
+For **codex flavor** (`--host codex`), the CLI will:
+1. Verify prereqs (codex CLI, python3, tmux, curl, jq, node ≥18). No bun, no claude.
+2. Validate the bot token against Telegram's `getMe`.
+3. Copy `template-codex/` into `../<name>/`. The `.env.tmpl` becomes `.env` with the token + chat_id substituted (mode 600).
+4. NO plugin install. NO Playwright `npm install`. The Python Telegram bridge daemon is in `scripts/tg-bridge.py`.
+5. Print next steps. The user runs `./start.sh` and DMs the bot. The bridge picks up via `getUpdates`, runs `codex exec` per turn, sends the captured `--output-last-message` back via `sendMessage`.
+
+Typical wall-clock: 20–30 seconds either flavor.
 
 ## Launching the new agent
 
@@ -75,7 +106,8 @@ After `npx create-hermit-agent` exits 0:
 ../<name>/start.sh
 ```
 
-This creates a new tmux session `claude-<name>` and launches the agent inside. It does NOT replace your own tmux session.
+For **claude flavor**, this creates a new tmux session `claude-<name>` and launches the agent inside.
+For **codex flavor**, the tmux session is `codex-<name>` and runs the Python Telegram bridge daemon (which in turn invokes `codex exec` per incoming message). It does NOT replace your own tmux session either way.
 
 Then fetch the new bot's `@username`:
 

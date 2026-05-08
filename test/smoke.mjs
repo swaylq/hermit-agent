@@ -1,13 +1,15 @@
 // Smoke test: copy template into /tmp/hermit-smoke-out/ with dummy placeholders
 // and sanity-check a few known substitutions.
 
-import { existsSync, rmSync, readFileSync, readdirSync, mkdirSync, writeFileSync, chmodSync, statSync } from 'node:fs';
+import { existsSync, rmSync, readFileSync, readdirSync, mkdirSync, writeFileSync, chmodSync, statSync, renameSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_DIR = resolve(__dirname, '..', 'template');
+const TEMPLATE_CODEX_DIR = resolve(__dirname, '..', 'template-codex');
 const TARGET = '/tmp/hermit-smoke-out';
+const TARGET_CODEX = '/tmp/hermit-smoke-codex';
 
 const TEXT_EXTS = new Set(['.md', '.json', '.js', '.ts', '.sh', '.bash', '.zsh', '.plist', '.toml', '.yml', '.yaml', '.tmpl', '.gitkeep', '.gitignore']);
 function isTextFile(path) {
@@ -427,8 +429,128 @@ const checks = [
     })()],
 ];
 
+// --- Codex flavor smoke ---
+//
+// Mirror the runCodexFlow walkCopy + plist rename, then assert the codex
+// template lands all the expected files with substitutions in place and
+// without claude-flavor artifacts (no CLAUDE.md, no .claude/, no settings.json).
+if (existsSync(TARGET_CODEX)) rmSync(TARGET_CODEX, { recursive: true, force: true });
+
+const codexVars = {
+  AGENT_NAME:         'codex-smoke',
+  AGENT_DISPLAY_NAME: 'Codex Smoke Test',
+  PERSONA:            'automated codex-flavor smoke-test agent',
+  USER_NAME:          'Tester',
+  USER_TG_ID:         '9999999',
+  TG_BOT_TOKEN:       '<<DUMMY_CODEX_TOKEN>>',
+  BRAVE_API_KEY:      '',
+  AGENT_DIR:          TARGET_CODEX,
+  STATE_DIR:          TARGET_CODEX,
+  CLAUDE_BIN:         '',
+};
+
+walkCopy(TEMPLATE_CODEX_DIR, TARGET_CODEX, codexVars);
+
+// Mirror the runCodexFlow filename-rename step for any launchd plist that
+// embeds {{AGENT_NAME}} in its filename.
+const codexLaunchdDir = join(TARGET_CODEX, 'launchd');
+if (existsSync(codexLaunchdDir)) {
+  for (const entry of readdirSync(codexLaunchdDir)) {
+    if (entry.includes('{{AGENT_NAME}}')) {
+      const oldPath = join(codexLaunchdDir, entry);
+      const newPath = join(codexLaunchdDir, entry.replace(/\{\{AGENT_NAME\}\}/g, codexVars.AGENT_NAME));
+      renameSync(oldPath, newPath);
+    }
+  }
+}
+
+const codexChecks = [
+  ['[codex] AGENTS.md present, host-aware (Codex CLI mention)',
+    (() => {
+      const p = join(TARGET_CODEX, 'AGENTS.md');
+      if (!existsSync(p)) return false;
+      const s = readFileSync(p, 'utf8');
+      return s.includes('Codex CLI') && s.includes('Codex Smoke Test') && !s.includes('{{');
+    })()],
+  ['[codex] No CLAUDE.md (codex flavor uses AGENTS.md as entry)',
+    !existsSync(join(TARGET_CODEX, 'CLAUDE.md'))],
+  ['[codex] No .claude/ subtree (codex flavor)',
+    !existsSync(join(TARGET_CODEX, '.claude'))],
+  ['[codex] .env substituted from .env.tmpl with token + chat_id',
+    (() => {
+      const p = join(TARGET_CODEX, '.env');
+      if (!existsSync(p)) return false;
+      const s = readFileSync(p, 'utf8');
+      return s.includes('TELEGRAM_BOT_TOKEN=<<DUMMY_CODEX_TOKEN>>') && s.includes('TELEGRAM_CHAT_ID=9999999');
+    })()],
+  ['[codex] no leftover .env.tmpl (suffix stripped)',
+    !existsSync(join(TARGET_CODEX, '.env.tmpl'))],
+  ['[codex] tg-bridge.py present and has admin commands',
+    (() => {
+      const p = join(TARGET_CODEX, 'scripts/tg-bridge.py');
+      if (!existsSync(p)) return false;
+      const s = readFileSync(p, 'utf8');
+      return s.includes('handle_admin') && s.includes('/help') && s.includes('/status') && s.includes('/reset') && s.includes('/restart');
+    })()],
+  ['[codex] hooks/{boot,pre-run,post-run}.sh present and executable',
+    ['boot.sh', 'pre-run.sh', 'post-run.sh'].every(h => {
+      try {
+        return (statSync(join(TARGET_CODEX, 'scripts/hooks', h)).mode & 0o111) !== 0;
+      } catch { return false; }
+    })],
+  ['[codex] safe-image.sh + with-timeout.sh + run-cron.sh executable',
+    ['safe-image.sh', 'with-timeout.sh', 'run-cron.sh'].every(s => {
+      try {
+        return (statSync(join(TARGET_CODEX, 'scripts', s)).mode & 0o111) !== 0;
+      } catch { return false; }
+    })],
+  ['[codex] start.sh + restart.sh use codex-<name> tmux session',
+    (() => {
+      const start = readFileSync(join(TARGET_CODEX, 'start.sh'), 'utf8');
+      const restart = readFileSync(join(TARGET_CODEX, 'restart.sh'), 'utf8');
+      return start.includes('SESSION="codex-codex-smoke"') && restart.includes('SESSION="codex-codex-smoke"');
+    })()],
+  ['[codex] launchd plist filename substituted from {{AGENT_NAME}} → codex-smoke',
+    existsSync(join(TARGET_CODEX, 'launchd/com.codex-hermit.codex-smoke.cron-heartbeat.plist'))
+    && !existsSync(join(TARGET_CODEX, 'launchd/com.codex-hermit.{{AGENT_NAME}}.cron-heartbeat.plist'))],
+  ['[codex] launchd plist content has Label + AGENT_DIR substituted',
+    (() => {
+      const p = join(TARGET_CODEX, 'launchd/com.codex-hermit.codex-smoke.cron-heartbeat.plist');
+      if (!existsSync(p)) return false;
+      const s = readFileSync(p, 'utf8');
+      return s.includes('com.codex-hermit.codex-smoke.cron-heartbeat')
+        && s.includes(TARGET_CODEX)
+        && !s.includes('{{');
+    })()],
+  ['[codex] AGENTS.md Mission section carries persona',
+    (() => {
+      const s = readFileSync(join(TARGET_CODEX, 'AGENTS.md'), 'utf8');
+      return s.includes('automated codex-flavor smoke-test agent');
+    })()],
+  ['[codex] FIRST_RUN.md present + agent name substituted',
+    (() => {
+      const p = join(TARGET_CODEX, 'FIRST_RUN.md');
+      if (!existsSync(p)) return false;
+      const s = readFileSync(p, 'utf8');
+      return s.includes('codex-smoke 上线') && !s.includes('{{');
+    })()],
+  ['[codex] TOOLS.md substituted USER_TG_ID',
+    readFileSync(join(TARGET_CODEX, 'TOOLS.md'), 'utf8').includes('9999999')],
+  ['[codex] cron/example-heartbeat.md present',
+    existsSync(join(TARGET_CODEX, 'cron/example-heartbeat.md'))],
+  ['[codex] skills/SKILLS.md + skills/restart + skills/provision-agent present',
+    existsSync(join(TARGET_CODEX, 'scripts/skills/SKILLS.md'))
+    && existsSync(join(TARGET_CODEX, 'scripts/skills/restart/SKILL.md'))
+    && existsSync(join(TARGET_CODEX, 'scripts/skills/provision-agent/SKILL.md'))],
+  ['[codex] multi-agent-status-report.sh executable',
+    (() => {
+      try { return (statSync(join(TARGET_CODEX, 'scripts/multi-agent-status-report.sh')).mode & 0o111) !== 0; }
+      catch { return false; }
+    })()],
+];
+
 let pass = 0, fail = 0;
-for (const [label, result] of checks) {
+for (const [label, result] of checks.concat(codexChecks)) {
   if (result) { console.log('✓', label); pass++; }
   else { console.log('✗', label); fail++; }
 }

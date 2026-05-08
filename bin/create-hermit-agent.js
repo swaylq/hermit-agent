@@ -12,7 +12,7 @@
 import { parseArgs } from 'node:util';
 import {
   existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync,
-  chmodSync, statSync, symlinkSync, rmSync,
+  chmodSync, statSync, symlinkSync, rmSync, renameSync,
 } from 'node:fs';
 import { join, resolve, dirname, basename, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,6 +24,8 @@ const prompts = (await import('prompts')).default;
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PACKAGE_DIR = resolve(__dirname, '..');
 const TEMPLATE_DIR = join(PACKAGE_DIR, 'template');
+const TEMPLATE_CODEX_DIR = join(PACKAGE_DIR, 'template-codex');
+const VALID_HOSTS = ['claude', 'codex'];
 
 const PLATFORM = platform();
 const IS_DARWIN = PLATFORM === 'darwin';
@@ -70,7 +72,7 @@ function warn(msg) {
 
 // --- Prerequisite checks ---
 
-function checkPrereqs() {
+function checkPrereqs(host = 'claude') {
   if (!IS_DARWIN && !IS_LINUX) {
     die(`Hermit Agent supports macOS and Linux. ${PLATFORM} is not supported (yet — PRs welcome).`);
   }
@@ -85,9 +87,27 @@ function checkPrereqs() {
     return r.status === 0 ? r.stdout.trim() : null;
   };
 
-  const claude = which('claude');
-  if (!claude) {
-    die('claude CLI not found on PATH.\n  Install it from https://docs.claude.com/claude-code, then re-run.');
+  // Host-specific binary check. Codex hermits don't need the claude CLI
+  // (and vice versa) — but the rest of the prereqs (tmux, curl, jq, bun on
+  // claude side, python3 on codex side) overlap.
+  let claude = null;
+  let codex = null;
+  if (host === 'claude') {
+    claude = which('claude');
+    if (!claude) {
+      die('claude CLI not found on PATH.\n  Install it from https://docs.claude.com/claude-code, then re-run.');
+    }
+  } else if (host === 'codex') {
+    codex = which('codex');
+    if (!codex) {
+      die('codex CLI not found on PATH.\n  Install it from https://developers.openai.com/codex/cli, then re-run.');
+    }
+    const python3 = which('python3');
+    if (!python3) {
+      die(`python3 not found on PATH (the codex Telegram bridge needs it).\n  Install with: ${installHint('python3')}`);
+    }
+  } else {
+    die(`Unknown --host: ${host}. Valid: ${VALID_HOSTS.join(', ')}`);
   }
 
   const tmux = which('tmux');
@@ -103,11 +123,16 @@ function checkPrereqs() {
     die(`curl not found on PATH.\n  Install with: ${installHint('curl')}`);
   }
 
-  const bunPath = which('bun') || (existsSync(`${homedir()}/.bun/bin/bun`) ? `${homedir()}/.bun/bin/bun` : null);
-  if (!bunPath) {
-    warn('bun not found. The Telegram plugin needs bun to run its server subprocess.');
-    warn('Install with: curl -fsSL https://bun.sh/install | bash   (then reopen your terminal)');
-    warn('Continuing — bun is only needed at agent runtime, not at scaffold time.');
+  // bun is only relevant for the claude flavor (the official telegram plugin
+  // ships a bun server subprocess). Codex flavor uses a Python bridge, no bun.
+  let bunPath = null;
+  if (host === 'claude') {
+    bunPath = which('bun') || (existsSync(`${homedir()}/.bun/bin/bun`) ? `${homedir()}/.bun/bin/bun` : null);
+    if (!bunPath) {
+      warn('bun not found. The Telegram plugin needs bun to run its server subprocess.');
+      warn('Install with: curl -fsSL https://bun.sh/install | bash   (then reopen your terminal)');
+      warn('Continuing — bun is only needed at agent runtime, not at scaffold time.');
+    }
   }
 
   const jq = which('jq');
@@ -133,7 +158,7 @@ function checkPrereqs() {
     }
   }
 
-  return { claude, tmux, bun: bunPath, jq };
+  return { claude, codex, tmux, bun: bunPath, jq, host };
 }
 
 // --- Arg parsing ---
@@ -150,12 +175,17 @@ function parseCliArgs() {
         'persona':    { type: 'string' },
         'brave-key':  { type: 'string' },
         'clone-of':   { type: 'string' },
+        'host':       { type: 'string', default: 'claude' },
         'yes':        { type: 'boolean', short: 'y', default: false },
         'help':       { type: 'boolean', short: 'h', default: false },
       },
     });
   } catch (e) {
     die(`Invalid arguments: ${e.message}\n  Run: create-hermit-agent --help`);
+  }
+
+  if (args.values.host && !VALID_HOSTS.includes(args.values.host)) {
+    die(`--host must be one of: ${VALID_HOSTS.join(', ')} (got: ${args.values.host})`);
   }
 
   if (args.values.help) {
@@ -181,12 +211,18 @@ Options:
                         its own session with its own bot. Auto-numbered as
                         <parent>-doppel-N. <parent> can be a name (resolved as
                         a sibling of cwd) or an absolute path.
+  --host <name>         Runtime host. 'claude' (default) builds a Claude Code
+                        hermit with the official telegram plugin. 'codex'
+                        builds a Codex CLI hermit with a Python Telegram
+                        bridge daemon — uses your ChatGPT subscription
+                        instead of API spend.
   --yes, -y             Skip interactive prompts (requires the above).
   --help, -h            Show this message.
 
 Examples:
   create-hermit-agent my-agent
   create-hermit-agent my-agent -y --bot-token 123:ABC --user-id 1234567 --persona "triage my github notifications"
+  create-hermit-agent my-agent --host codex -y --bot-token 123:ABC --user-id 1234567 --persona "..."
   create-hermit-agent --clone-of asst -y --bot-token 456:DEF
 `);
     process.exit(0);
@@ -1196,15 +1232,128 @@ function chmodScripts(targetDir) {
 
 // --- Main ---
 
+// --- Codex flavor flow ---
+//
+// Codex hermits don't use the official telegram plugin (which is a Claude
+// Code marketplace artifact). They run a small Python bridge that polls
+// `getUpdates`, invokes `codex exec [resume <thread_id>]` per message, and
+// posts the captured `--output-last-message` back via `sendMessage`.
+//
+// What this flow does (vs the claude flavor):
+//   • walkCopy from template-codex/ instead of template/
+//   • The `.env.tmpl` in template-codex carries TG_BOT_TOKEN + USER_TG_ID
+//     placeholders; walkCopy strips `.tmpl` to land at workspace `.env`,
+//     which we then chmod 600.
+//   • No `claude plugin install`. No preAcknowledgeClaudeDialogs. No npm
+//     install for playwright. No status-reporter LaunchAgent (codex flavor
+//     ships its own scripts/multi-agent-status-report.sh as opt-in).
+//
+// Final printout is host-aware: tmux session is `codex-<name>` (run by
+// start.sh in the agent dir), not `claude-<name>`.
+async function runCodexFlow(values, positional, prereqs) {
+  const answers = await collectAnswers(values, positional);
+
+  console.log('');
+  console.log(bold('Plan (codex flavor):'));
+  console.log(`  Agent       : ${answers.agentName}`);
+  console.log(`  Bot         : @${answers.botUsername}`);
+  console.log(`  Target dir  : ${answers.targetDir}`);
+  console.log(`  Persona     : ${answers.persona}`);
+  console.log(`  Host        : codex (subscription via codex login)`);
+  console.log('');
+
+  if (!values.yes) {
+    const { go } = await prompts({
+      type: 'confirm',
+      name: 'go',
+      message: 'Proceed?',
+      initial: true,
+    });
+    if (!go) {
+      console.log(dim('Aborted.'));
+      process.exit(0);
+    }
+  }
+
+  // 1. Copy template-codex/
+  step('Copying codex template…');
+  const vars = {
+    AGENT_NAME:           answers.agentName,
+    AGENT_DISPLAY_NAME:   answers.displayName,
+    PERSONA:              answers.persona,
+    USER_NAME:            answers.userName,
+    USER_TG_ID:           answers.userTgId,
+    TG_BOT_TOKEN:         answers.botToken,
+    BRAVE_API_KEY:        answers.braveKey || '',
+    AGENT_DIR:            answers.targetDir,
+    STATE_DIR:            answers.targetDir,    // codex flavor keeps state in workspace
+    CLAUDE_BIN:           '',                    // unused
+  };
+  walkCopy(TEMPLATE_CODEX_DIR, answers.targetDir, vars);
+
+  // 2. Filename substitution: rename launchd plist {{AGENT_NAME}} → actual name.
+  // walkCopy substitutes file *contents* but not filenames.
+  const launchdDir = join(answers.targetDir, 'launchd');
+  if (existsSync(launchdDir)) {
+    for (const entry of readdirSync(launchdDir)) {
+      if (entry.includes('{{AGENT_NAME}}')) {
+        const oldPath = join(launchdDir, entry);
+        const newPath = join(launchdDir, entry.replace(/\{\{AGENT_NAME\}\}/g, answers.agentName));
+        renameSync(oldPath, newPath);
+      }
+    }
+  }
+
+  // 3. Lock down .env to mode 600 (token sits there).
+  const envPath = join(answers.targetDir, '.env');
+  if (existsSync(envPath)) {
+    chmodSync(envPath, 0o600);
+    ok(`.env written at ${envPath} (mode 600)`);
+  }
+
+  // 4. Make scripts executable (walkCopy preserves source mode but for safety).
+  chmodScripts(answers.targetDir);
+
+  ok(`Codex hermit scaffolded at ${answers.targetDir}`);
+
+  // Final printout
+  const tmuxSession = `codex-${answers.agentName}`;
+  console.log('');
+  console.log(green(bold(`✓ Codex hermit ready.`)));
+  console.log(dim(`   Uses your ChatGPT subscription via the codex CLI — no API key spend.`));
+  console.log('');
+  console.log(bold('Next steps:'));
+  console.log(`  1. Make sure codex is logged in:`);
+  console.log(`       codex login status     ${dim('(should say "Logged in using ChatGPT")')}`);
+  console.log('');
+  console.log(`  2. Start the bridge:`);
+  console.log(`       cd ${relative(process.cwd(), answers.targetDir) || '.'}`);
+  console.log(`       ./start.sh`);
+  console.log('');
+  console.log(`  3. Send any message to your bot on Telegram → @${answers.botUsername}`);
+  console.log(`     (the boot hook will fire FIRST_RUN.md welcome on first launch)`);
+  console.log('');
+  console.log(`  4. Attach to watch:`);
+  console.log(`       tmux attach -t ${tmuxSession}    ${dim('(detach: Ctrl-b d)')}`);
+  console.log('');
+  console.log(dim(`Restart with: ./restart.sh   |   Reset thread: send /reset to the bot.`));
+}
+
 async function main() {
+  // Parse args FIRST — we need --host before checkPrereqs picks the right binary.
+  const cli = parseCliArgs();
+  const host = cli.values.host || 'claude';
+
   console.log('');
   console.log(bold('🦀 create-hermit-agent'));
-  console.log(dim('Bootstrapping a Telegram-connected Claude Code agent…'));
+  if (host === 'codex') {
+    console.log(dim('Bootstrapping a Telegram-connected Codex CLI agent…'));
+  } else {
+    console.log(dim('Bootstrapping a Telegram-connected Claude Code agent…'));
+  }
   console.log('');
 
-  const prereqs = checkPrereqs();
-
-  const cli = parseCliArgs();
+  const prereqs = checkPrereqs(host);
 
   // Clone mode: skip the fresh-agent flow entirely. Symlink-based provisioning
   // off an existing parent.
@@ -1213,6 +1362,13 @@ async function main() {
       die('Pass either a <name> for a fresh agent or --clone-of <parent> for a doppel — not both.');
     }
     await runCloneFlow(cli.values, cli.values['clone-of'], prereqs);
+    return;
+  }
+
+  // Branch on host. Codex flavor has its own simpler flow (no plugin install,
+  // no preack TUI dialogs, no claude-specific Linux scheduling).
+  if (host === 'codex') {
+    await runCodexFlow(cli.values, cli.positionals[0], prereqs);
     return;
   }
 
