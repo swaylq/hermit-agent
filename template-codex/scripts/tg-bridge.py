@@ -6,8 +6,8 @@ Polls Telegram via getUpdates long-poll, runs `codex exec` (or resume) per
 incoming message, captures the agent's last message, and replies via
 sendMessage.
 
-Run from the workspace root (codex-demo/), so codex picks up AGENTS.md and
-its siblings as the working-directory persona.
+Run from the agent workspace root, so codex picks up AGENTS.md and its
+siblings as the working-directory persona.
 
 Env required:
   TELEGRAM_BOT_TOKEN  -- bot token from @BotFather
@@ -35,6 +35,12 @@ THREAD_FILE = STATE_DIR / "thread.txt"
 UPDATE_ID_FILE = STATE_DIR / "update_id.txt"
 LAST_MSG_FILE = STATE_DIR / "last.txt"
 
+# Codex's built-in image_gen tool writes png artifacts here (per thread).
+# We snapshot the tree before each codex turn and diff after, so any new
+# files generated during the turn get pushed back to Telegram via sendPhoto.
+GENERATED_DIR = Path.home() / ".codex" / "generated_images"
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+
 POLL_TIMEOUT = 25
 HTTP_TIMEOUT = 30
 
@@ -59,6 +65,48 @@ def send(chat_id, text):
     req = urllib.request.Request(f"{API}/sendMessage", data=body, method="POST")
     with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
         return json.load(r)
+
+
+def send_photo(chat_id, photo_path, caption=None):
+    """POST a file to Telegram sendPhoto. Builds multipart/form-data manually
+    so we keep stdlib-only and don't put the token / file content on argv.
+    """
+    boundary = f"----TgBridge{int(time.time() * 1000)}"
+    with open(photo_path, "rb") as f:
+        data = f.read()
+    filename = os.path.basename(photo_path)
+    parts = [f"--{boundary}\r\n"
+             f'Content-Disposition: form-data; name="chat_id"\r\n\r\n'
+             f"{chat_id}\r\n".encode()]
+    if caption:
+        parts.append((f"--{boundary}\r\n"
+                      f'Content-Disposition: form-data; name="caption"\r\n\r\n'
+                      f"{caption}\r\n").encode())
+    parts.append((f"--{boundary}\r\n"
+                  f'Content-Disposition: form-data; name="photo"; filename="{filename}"\r\n'
+                  f"Content-Type: application/octet-stream\r\n\r\n").encode())
+    parts.append(data)
+    parts.append(f"\r\n--{boundary}--\r\n".encode())
+    body = b"".join(parts)
+    req = urllib.request.Request(
+        f"{API}/sendPhoto",
+        data=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
+        return json.load(r)
+
+
+def snapshot_generated():
+    """Return a set of absolute paths for image artifacts under GENERATED_DIR."""
+    if not GENERATED_DIR.exists():
+        return set()
+    out = set()
+    for p in GENERATED_DIR.rglob("*"):
+        if p.is_file() and p.suffix.lower() in IMAGE_EXTS:
+            out.add(str(p))
+    return out
 
 
 def chat_action(chat_id, action="typing"):
@@ -266,6 +314,7 @@ def handle(msg):
         send(chat_id, f"(pre-run hook aborted, exit={rc})")
         return
 
+    images_before = snapshot_generated()
     try:
         with TypingPulse(chat_id):
             new_thread, reply = run_codex(text, thread_id=thread)
@@ -280,6 +329,19 @@ def handle(msg):
         write_state(THREAD_FILE, new_thread)
     if not reply:
         reply = "(empty reply)"
+
+    # New images generated during this turn — sendPhoto each before the text
+    # reply, so user sees the artifact then the explanation.
+    images_after = snapshot_generated()
+    new_images = sorted(images_after - images_before)
+    for img in new_images:
+        try:
+            chat_action(chat_id, "upload_photo")
+            send_photo(chat_id, img)
+            print(f"<- photo {os.path.basename(img)} ({os.path.getsize(img)} bytes)", flush=True)
+        except Exception as e:
+            print(f"sendPhoto error for {img}: {type(e).__name__}: {e}", file=sys.stderr)
+            # Fall through — user still gets the text reply
 
     # post-run hook — its stdout, if non-empty, replaces the reply
     rc, transformed = run_hook("post-run", env_extra={
@@ -303,7 +365,7 @@ def handle(msg):
 def main():
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     last_update = int(read_state(UPDATE_ID_FILE) or 0)
-    print(f"codex-demo bridge starting; resuming from update_id={last_update}", flush=True)
+    print(f"codex-hermit bridge starting; resuming from update_id={last_update}", flush=True)
 
     # boot hook — fire-and-forget at daemon startup (Codex equivalent of SessionStart)
     rc, _ = run_hook("boot")

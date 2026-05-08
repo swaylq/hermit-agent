@@ -492,6 +492,17 @@ const codexChecks = [
       const s = readFileSync(p, 'utf8');
       return s.includes('handle_admin') && s.includes('/help') && s.includes('/status') && s.includes('/reset') && s.includes('/restart');
     })()],
+  ['[codex] tg-bridge.py supports sendPhoto for codex-generated images',
+    (() => {
+      const s = readFileSync(join(TARGET_CODEX, 'scripts/tg-bridge.py'), 'utf8');
+      return s.includes('def send_photo')
+        && s.includes('multipart/form-data')
+        && s.includes('def snapshot_generated')
+        && s.includes('GENERATED_DIR')
+        && s.includes('.codex')
+        && s.includes('generated_images')
+        && s.includes('upload_photo');
+    })()],
   ['[codex] hooks/{boot,pre-run,post-run}.sh present and executable',
     ['boot.sh', 'pre-run.sh', 'post-run.sh'].every(h => {
       try {
