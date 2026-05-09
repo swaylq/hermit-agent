@@ -193,8 +193,16 @@ def run_hook(name, env_extra=None, capture_stdout=False, timeout=30):
     return proc.returncode, out
 
 
+CODEX_TIMEOUT_SEC = 1800  # 30 min ceiling per turn
+
 def run_codex(prompt, thread_id=None):
-    """Run codex exec (or resume) with the prompt. Returns (new_thread_id, last_message)."""
+    """Run codex exec (or resume) with the prompt. Returns (new_thread_id, last_message).
+
+    Uses Popen + start_new_session so we own the process group; on timeout we
+    SIGKILL the whole pgroup (codex itself spawns helper processes that subprocess.run
+    + plain proc.kill() won't reach, which previously left orphans pinned to PPID=1
+    and the daemon stuck in proc.wait()).
+    """
     LAST_MSG_FILE.parent.mkdir(parents=True, exist_ok=True)
     if LAST_MSG_FILE.exists():
         LAST_MSG_FILE.unlink()
@@ -213,15 +221,28 @@ def run_codex(prompt, thread_id=None):
         "--dangerously-bypass-approvals-and-sandbox",
         prompt,
     ]
-    proc = subprocess.run(
+    proc = subprocess.Popen(
         cmd,
         cwd=str(WORKSPACE),
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=600,
+        start_new_session=True,
     )
+    try:
+        stdout, _stderr = proc.communicate(timeout=CODEX_TIMEOUT_SEC)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(proc.pid), 9)  # SIGKILL whole process group
+        except (ProcessLookupError, PermissionError):
+            pass
+        try:
+            proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass  # whole group still won't die; let GC handle eventually
+        raise  # re-raise so handle() messages the user
     new_thread = thread_id
-    for line in proc.stdout.splitlines():
+    for line in stdout.splitlines():
         line = line.strip()
         if not line:
             continue
@@ -325,7 +346,7 @@ def handle(msg):
         with TypingPulse(chat_id):
             new_thread, reply = run_codex(text, thread_id=thread)
     except subprocess.TimeoutExpired:
-        send(chat_id, "(codex timed out after 10 min)")
+        send(chat_id, f"(codex timed out after {CODEX_TIMEOUT_SEC // 60} min — process group killed; thread preserved, send another message to continue)")
         return
     except Exception as e:
         send(chat_id, f"(bridge error: {type(e).__name__}: {e})")

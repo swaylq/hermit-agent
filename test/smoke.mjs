@@ -510,6 +510,15 @@ const codexChecks = [
       return py.includes('--dangerously-bypass-approvals-and-sandbox')
         && sh.includes('--dangerously-bypass-approvals-and-sandbox');
     })()],
+  ['[codex] tg-bridge.py uses Popen + start_new_session + killpg on timeout (30 min ceiling)',
+    (() => {
+      const s = readFileSync(join(TARGET_CODEX, 'scripts/tg-bridge.py'), 'utf8');
+      return s.includes('subprocess.Popen')
+        && s.includes('start_new_session=True')
+        && s.includes('os.killpg')
+        && s.includes('CODEX_TIMEOUT_SEC')
+        && s.includes('1800');
+    })()],
   ['[codex] hooks/{boot,pre-run,post-run}.sh present and executable',
     ['boot.sh', 'pre-run.sh', 'post-run.sh'].every(h => {
       try {
