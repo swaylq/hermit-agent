@@ -46,7 +46,9 @@ PROMPT="$(cat "$PROMPT_FILE")"
 
 if "$WORKDIR/scripts/with-timeout.sh" 1200 \
         codex exec --json --output-last-message "$LAST" \
-        --skip-git-repo-check "$PROMPT" \
+        --skip-git-repo-check \
+        --dangerously-bypass-approvals-and-sandbox \
+        "$PROMPT" \
         >> "$LOG" 2>&1; then
     REPLY="$(cat "$LAST" 2>/dev/null || echo '(no last message)')"
     {

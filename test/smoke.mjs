@@ -503,6 +503,13 @@ const codexChecks = [
         && s.includes('generated_images')
         && s.includes('upload_photo');
     })()],
+  ['[codex] tg-bridge.py + run-cron.sh both pass --dangerously-bypass-approvals-and-sandbox',
+    (() => {
+      const py = readFileSync(join(TARGET_CODEX, 'scripts/tg-bridge.py'), 'utf8');
+      const sh = readFileSync(join(TARGET_CODEX, 'scripts/run-cron.sh'), 'utf8');
+      return py.includes('--dangerously-bypass-approvals-and-sandbox')
+        && sh.includes('--dangerously-bypass-approvals-and-sandbox');
+    })()],
   ['[codex] hooks/{boot,pre-run,post-run}.sh present and executable',
     ['boot.sh', 'pre-run.sh', 'post-run.sh'].every(h => {
       try {

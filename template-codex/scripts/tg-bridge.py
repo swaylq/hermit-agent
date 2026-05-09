@@ -205,6 +205,12 @@ def run_codex(prompt, thread_id=None):
         "--json",
         "--output-last-message", str(LAST_MSG_FILE),
         "--skip-git-repo-check",
+        # Codex defaults to --sandbox read-only, which blocks writes and
+        # network. We want hermit agents to behave like claude flavor's
+        # --dangerously-skip-permissions: full filesystem + network, no
+        # approval prompts. --dangerously-bypass-approvals-and-sandbox
+        # (alias --yolo) sets sandbox=danger-full-access + ask=never.
+        "--dangerously-bypass-approvals-and-sandbox",
         prompt,
     ]
     proc = subprocess.run(
