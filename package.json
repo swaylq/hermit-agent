@@ -1,6 +1,6 @@
 {
   "name": "create-hermit-agent",
-  "version": "0.1.42",
+  "version": "0.1.43",
   "description": "Bootstrap a Telegram-connected Claude Code agent. Hermit-crab style — borrow the shell, bring your own body.",
   "type": "module",
   "bin": {

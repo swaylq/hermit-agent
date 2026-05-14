@@ -1,18 +1,24 @@
 #!/bin/bash
-# Multi-agent status digest.
+# Multi-agent + scheduled-task status digest.
 #
 # Scans every sibling agent directory under a configurable root (defaults to the
 # parent of this agent's directory) and reports a per-agent status digest to the
-# Telegram chat configured in this agent's settings.local.json.
+# Telegram chat configured in this agent's settings.local.json. Also probes any
+# LaunchAgent plists matching the `com.hermit-agent.*` label convention and
+# reports their freshness (runs counter delta + last exit code).
 #
 # Per-agent status is derived from:
 #   - agent.pid + kill -0 (alive?)
 #   - .claude/state/session-status.json (running / idle / stuck)
 #   - last_tool_ts / last_user_prompt_ts / last_stop_ts
 #
+# Task checks (auto-discovered):
+#   - LaunchAgent interval task: track launchctl `runs` delta; stale if no
+#     delta for > 1.5× interval; 🟥 if last exit != 0
+#
 # Cadence:
 #   - any state change vs last_alert → push immediately
-#   - any stuck agent → push every 10 min (STUCK_COOLDOWN)
+#   - any stuck agent OR any task bad → push every 10 min (STUCK_COOLDOWN)
 #   - otherwise → push every 30 min (NORMAL_COOLDOWN)
 #
 # Designed to run as a LaunchAgent every 10 minutes. See
@@ -53,6 +59,17 @@ fmt_duration() {
   fi
 }
 
+# launchctl probes — used by the tasks section to monitor scheduled plists.
+launchctl_pid() {
+  launchctl list 2>/dev/null | awk -v l="$1" '$3==l {print $1; exit}'
+}
+launchctl_exit() {
+  launchctl list 2>/dev/null | awk -v l="$1" '$3==l {print $2; exit}'
+}
+launchctl_runs() {
+  launchctl print "gui/$(id -u)/$1" 2>/dev/null | awk -F= '/^[ \t]*runs =/ {gsub(/[^0-9]/,"",$2); print $2; exit}'
+}
+
 # tmux pane state probe — distinguishes real stuck from stale session-status.json.
 # Claude Code's Stop hook can miss on abnormal turn exit (TLS / 500 / AUP /
 # scheduled-task interrupt), leaving state=running forever. We double-check
@@ -75,7 +92,11 @@ pane_state_check() {
     echo "churning"
     return
   fi
-  if echo "$pane" | tail -6 | grep -qE "^❯[[:space:]]*$"; then
+  # Idle prompt within last 6 lines. Two forms:
+  #   `❯ `         — empty input box
+  #   `❯ Try "…"`  — Claude Code v2.x rotating placeholder suggestions
+  # Both mean "not running a turn".
+  if echo "$pane" | tail -6 | grep -qE "^❯[[:space:]]*$|^❯[[:space:]]+Try "; then
     echo "idle"
     return
   fi
@@ -204,6 +225,7 @@ stuck_counts_entries=()
 # active 403 episode get persisted — clean recovery clears the entry.
 nudges_entries=()
 
+# ---------- Agents ----------
 for dir in "$AGENTS_ROOT"/*/; do
   name=$(basename "$dir")
   [ ! -f "$dir/CLAUDE.md" ] && continue
@@ -392,10 +414,103 @@ if [ ${#down_list[@]} -gt 0 ]; then
   unset IFS
 fi
 
-# Nothing running and nothing down worth reporting → exit silent
-[ "$any_active" -eq 0 ] && [ ${#down_list[@]} -eq 0 ] && exit 0
+# ---------- Tasks ----------
+# Auto-discover all `com.hermit-agent.*.plist` LaunchAgents and probe their
+# freshness via launchctl `runs` delta + last exit code. Users who add cron
+# plists under the conventional naming get monitored automatically; nothing
+# in here is hub-specific.
+task_lines=()
+any_task_bad=0
+task_runs_entries=()
+task_ts_entries=()
 
-# Cooldown + change detection
+prev_runs_json="{}"
+prev_ts_json="{}"
+if [ -f "$ALERT_FILE" ]; then
+  prev_runs_json=$(jq -c '.task_runs // {}' "$ALERT_FILE" 2>/dev/null)
+  prev_ts_json=$(jq -c '.task_runs_ts // {}' "$ALERT_FILE" 2>/dev/null)
+  [ -z "$prev_runs_json" ] && prev_runs_json="{}"
+  [ -z "$prev_ts_json" ] && prev_ts_json="{}"
+fi
+
+check_daemon() {
+  local label=$1 display=$2
+  local pid
+  pid=$(launchctl_pid "$label")
+  if [ -n "$pid" ] && [ "$pid" != "-" ]; then
+    task_lines+=("🟢 $display · up")
+    states_joined+="tk_${display}=up;"
+  else
+    task_lines+=("🟥 $display · down")
+    states_joined+="tk_${display}=down;"
+    any_task_bad=1
+  fi
+}
+
+check_interval_agent() {
+  local label=$1 display=$2 interval_sec=$3
+  local runs exit_code
+  runs=$(launchctl_runs "$label")
+  exit_code=$(launchctl_exit "$label")
+  [ -z "$runs" ] && runs=0
+  [ -z "$exit_code" ] && exit_code=0
+
+  local prev_runs prev_ts
+  prev_runs=$(echo "$prev_runs_json" | jq -r --arg k "$label" '.[$k] // 0')
+  prev_ts=$(echo "$prev_ts_json" | jq -r --arg k "$label" '.[$k] // 0')
+  [ "$prev_runs" = "null" ] && prev_runs=0
+  [ "$prev_ts" = "null" ] && prev_ts=0
+
+  local current_ts
+  if [ "$runs" -gt "$prev_runs" ] || [ "$prev_ts" -eq 0 ]; then
+    current_ts=$now
+  else
+    current_ts=$prev_ts
+  fi
+
+  task_runs_entries+=("\"$label\":$runs")
+  task_ts_entries+=("\"$label\":$current_ts")
+
+  local stale_threshold=$((interval_sec * 3 / 2))
+  local age=$((now - current_ts))
+
+  if [ "$exit_code" != "0" ]; then
+    task_lines+=("🟥 $display · last exit $exit_code")
+    states_joined+="tk_${display}=err${exit_code};"
+    any_task_bad=1
+  elif [ "$runs" -eq 0 ]; then
+    task_lines+=("🟨 $display · never ran")
+    states_joined+="tk_${display}=never;"
+    any_task_bad=1
+  elif [ "$age" -gt "$stale_threshold" ]; then
+    task_lines+=("🟨 $display · stale $(fmt_duration $age)")
+    states_joined+="tk_${display}=stale;"
+    any_task_bad=1
+  else
+    task_lines+=("🟢 $display · ran $(fmt_duration $age) ago")
+    states_joined+="tk_${display}=ok;"
+  fi
+}
+
+# Auto-discover hermit-agent LaunchAgent plists. Convention:
+#   com.hermit-agent.<agent>.<task>.plist
+# Display name drops the `com.hermit-agent.` prefix so it reads "<agent>.<task>".
+# Skips plists that don't have a StartInterval (e.g., pure KeepAlive daemons —
+# users wanting those can call check_daemon explicitly).
+for plist in "$HOME"/Library/LaunchAgents/com.hermit-agent.*.plist; do
+  [ -f "$plist" ] || continue
+  label=$(/usr/libexec/PlistBuddy -c "Print :Label" "$plist" 2>/dev/null)
+  interval=$(/usr/libexec/PlistBuddy -c "Print :StartInterval" "$plist" 2>/dev/null)
+  [ -z "$label" ] && continue
+  [ -z "$interval" ] && continue
+  display="${label#com.hermit-agent.}"
+  check_interval_agent "$label" "$display" "$interval"
+done
+
+# ---------- Exit if nothing to say ----------
+[ "$any_active" -eq 0 ] && [ ${#down_list[@]} -eq 0 ] && [ "$any_task_bad" -eq 0 ] && exit 0
+
+# ---------- Cooldown + change detection ----------
 last_alert_ts=0
 last_states=""
 if [ -f "$ALERT_FILE" ]; then
@@ -403,7 +518,7 @@ if [ -f "$ALERT_FILE" ]; then
   last_states=$(jq -r '.last_states // ""' "$ALERT_FILE" 2>/dev/null)
 fi
 
-if [ "$any_stuck" -eq 1 ]; then
+if [ "$any_stuck" -eq 1 ] || [ "$any_task_bad" -eq 1 ]; then
   cooldown=$STUCK_COOLDOWN
 else
   cooldown=$NORMAL_COOLDOWN
@@ -415,14 +530,37 @@ should_alert=0
 [ $((now - last_alert_ts)) -ge "$cooldown" ] && should_alert=1
 
 if [ "$should_alert" -eq 0 ]; then
+  # Still persist task counters + escalation state so we don't lose tracking
+  # between alert windows. `${arr[*]:-}` is required because `set -u` errors on
+  # empty-array deref; these arrays are empty when nothing of that kind exists.
+  task_runs_json="{$(IFS=,; echo "${task_runs_entries[*]:-}")}"
+  task_ts_json="{$(IFS=,; echo "${task_ts_entries[*]:-}")}"
+  stuck_counts_json="{$(IFS=,; echo "${stuck_counts_entries[*]:-}")}"
+  nudges_json="{$(IFS=,; echo "${nudges_entries[*]:-}")}"
+  jq -n \
+    --argjson ts "$last_alert_ts" \
+    --arg s "$last_states" \
+    --argjson runs "$task_runs_json" \
+    --argjson runs_ts "$task_ts_json" \
+    --argjson stuck "$stuck_counts_json" \
+    --argjson nudges "$nudges_json" \
+    '{last_alert_ts:$ts, last_states:$s, task_runs:$runs, task_runs_ts:$runs_ts, stuck_counts:$stuck, nudges:$nudges}' \
+    > "$ALERT_FILE"
   exit 0
 fi
 
-# Compose message
+# ---------- Compose message ----------
 msg="📡 agents"$'\n'
 for line in "${lines[@]}"; do
   msg+="$line"$'\n'
 done
+
+if [ ${#task_lines[@]} -gt 0 ]; then
+  msg+=$'\n'"⏱ tasks"$'\n'
+  for line in "${task_lines[@]}"; do
+    msg+="$line"$'\n'
+  done
+fi
 
 # Per-agent current context — sorted desc, 🟧 marker at >=500k (auto-compact zone
 # for 1M models is around 800k+, but >=500k = "consider /clear soon").
@@ -550,14 +688,18 @@ else
     --data-urlencode "text=${msg}" >/dev/null 2>&1
 fi
 
+task_runs_json="{$(IFS=,; echo "${task_runs_entries[*]:-}")}"
+task_ts_json="{$(IFS=,; echo "${task_ts_entries[*]:-}")}"
 stuck_counts_json="{$(IFS=,; echo "${stuck_counts_entries[*]:-}")}"
 nudges_json="{$(IFS=,; echo "${nudges_entries[*]:-}")}"
 jq -n \
   --argjson ts "$now" \
   --arg s "$states_joined" \
+  --argjson runs "$task_runs_json" \
+  --argjson runs_ts "$task_ts_json" \
   --argjson stuck "$stuck_counts_json" \
   --argjson nudges "$nudges_json" \
-  '{last_alert_ts:$ts, last_states:$s, stuck_counts:$stuck, nudges:$nudges}' \
+  '{last_alert_ts:$ts, last_states:$s, task_runs:$runs, task_runs_ts:$runs_ts, stuck_counts:$stuck, nudges:$nudges}' \
   > "$ALERT_FILE"
 
 exit 0
