@@ -1,0 +1,18 @@
+[Unit]
+# Idle-hibernator service. Paired with idle-hibernator.timer; installed by the
+# create-hermit-agent CLI only for the FIRST hermit on a machine (the
+# coordinator / master). HIBERNATOR_SELF excludes the coordinator itself from
+# the hibernate sweep.
+
+Description=Hermit agent {{AGENT_NAME}} idle-hibernator sweep
+
+[Service]
+Type=oneshot
+WorkingDirectory={{AGENT_DIR}}
+Environment=HIBERNATOR_SELF={{AGENT_NAME}}
+
+ExecStartPre=/bin/mkdir -p {{AGENT_DIR}}/.claude/state
+ExecStart=/bin/bash {{AGENT_DIR}}/scripts/idle-hibernator.sh
+
+# Logs go to the systemd journal. View with:
+#   journalctl --user -u hermit-{{AGENT_NAME}}-idle-hibernator.service -f

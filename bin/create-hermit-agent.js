@@ -725,6 +725,121 @@ function installStatusReporterLinux(targetDir, agentName) {
   return { role: 'master', coordinator: agentName };
 }
 
+// --- Hibernation system (idle-hibernator + wake-poller) ---
+//
+// Installed only on the master/coordinator hermit, alongside the status reporter.
+// Workers skip — the master runs the fleet-wide hibernation sweep and wake poll.
+// Single-hermit users still get the LaunchAgents loaded, but the scripts no-op
+// quickly (idle-hibernator excludes the master self; wake-poller's fast-path
+// exits in <100ms when nothing is paused).
+
+const HIBERNATION_TASKS = ['idle-hibernator', 'wake-poller'];
+
+function installHibernationSystem(targetDir, agentName, role) {
+  if (role !== 'master') return { installed: [], failed: [] };
+  if (IS_DARWIN) return installHibernationSystemDarwin(targetDir, agentName);
+  if (IS_LINUX) return installHibernationSystemLinux(targetDir, agentName);
+  return { installed: [], failed: [] };
+}
+
+function installHibernationSystemDarwin(targetDir, agentName) {
+  step('Installing hibernation LaunchAgents (idle-hibernator + wake-poller)…');
+
+  const launchAgentsDir = join(homedir(), 'Library', 'LaunchAgents');
+  mkdirSync(launchAgentsDir, { recursive: true });
+
+  const installed = [];
+  const failed = [];
+
+  for (const task of HIBERNATION_TASKS) {
+    const srcPlist = join(targetDir, 'launchd', `${task}.plist`);
+    if (!existsSync(srcPlist)) {
+      warn(`launchd/${task}.plist missing from scaffold — skipping.`);
+      failed.push(task);
+      continue;
+    }
+    const destPlist = join(launchAgentsDir, `com.hermit-agent.${agentName}.${task}.plist`);
+    try {
+      writeFileSync(destPlist, readFileSync(srcPlist));
+      chmodSync(destPlist, 0o644);
+    } catch (e) {
+      warn(`Could not copy ${task} plist: ${e.message}\n  Install manually: cp ${srcPlist} ${destPlist} && launchctl load ${destPlist}`);
+      failed.push(task);
+      continue;
+    }
+    const r = spawnSync('launchctl', ['load', destPlist], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      encoding: 'utf8',
+    });
+    if (r.status !== 0) {
+      warn(`launchctl load ${task} exited ${r.status}. Output: ${(r.stderr || r.stdout || '').trim()}`);
+      warn(`Retry manually: launchctl load ${destPlist}`);
+      failed.push(task);
+      continue;
+    }
+    installed.push(task);
+  }
+
+  if (installed.length > 0) {
+    ok(`Hibernation LaunchAgents loaded: ${installed.join(' + ')}. Idle threshold: 48h.`);
+  }
+  return { installed, failed };
+}
+
+function installHibernationSystemLinux(targetDir, agentName) {
+  step('Installing hibernation systemd timers (idle-hibernator + wake-poller)…');
+
+  const unitDir = process.env.XDG_CONFIG_HOME
+    ? join(process.env.XDG_CONFIG_HOME, 'systemd', 'user')
+    : join(homedir(), '.config', 'systemd', 'user');
+  mkdirSync(unitDir, { recursive: true });
+
+  const installed = [];
+  const failed = [];
+
+  for (const task of HIBERNATION_TASKS) {
+    const srcService = join(targetDir, 'systemd', `${task}.service`);
+    const srcTimer = join(targetDir, 'systemd', `${task}.timer`);
+    if (!existsSync(srcService) || !existsSync(srcTimer)) {
+      warn(`systemd/${task}.{service,timer} missing — skipping.`);
+      failed.push(task);
+      continue;
+    }
+    const timerName = `hermit-${agentName}-${task}.timer`;
+    const serviceName = `hermit-${agentName}-${task}.service`;
+    const destService = join(unitDir, serviceName);
+    const destTimer = join(unitDir, timerName);
+    try {
+      writeFileSync(destService, readFileSync(srcService));
+      writeFileSync(destTimer, readFileSync(srcTimer));
+      chmodSync(destService, 0o644);
+      chmodSync(destTimer, 0o644);
+    } catch (e) {
+      warn(`Could not copy ${task} units: ${e.message}`);
+      failed.push(task);
+      continue;
+    }
+    const r = spawnSync('systemctl', ['--user', 'enable', '--now', timerName], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      encoding: 'utf8',
+    });
+    if (r.status !== 0) {
+      warn(`systemctl --user enable --now ${timerName} exited ${r.status}. Output: ${(r.stderr || r.stdout || '').trim()}`);
+      warn(`Retry manually: systemctl --user daemon-reload && systemctl --user enable --now ${timerName}`);
+      failed.push(task);
+      continue;
+    }
+    installed.push(task);
+  }
+
+  // One daemon-reload covers both unit pairs.
+  if (installed.length > 0) {
+    spawnSync('systemctl', ['--user', 'daemon-reload'], { stdio: 'ignore' });
+    ok(`Hibernation systemd timers loaded: ${installed.join(' + ')}. Idle threshold: 48h.`);
+  }
+  return { installed, failed };
+}
+
 // --- Per-platform layer pruning ---
 //
 // The template ships everything: launchd + systemd templates, browser /
@@ -1437,7 +1552,10 @@ async function main() {
   // 6. Install multi-agent status reporter LaunchAgent (idempotent, one per machine)
   const role = installStatusReporter(answers.targetDir, answers.agentName);
 
-  // 6. Final printout — distinguish master (coordinator) from worker.
+  // 7. Install hibernation system on the master only (idle-hibernator + wake-poller).
+  installHibernationSystem(answers.targetDir, answers.agentName, role.role);
+
+  // 8. Final printout — distinguish master (coordinator) from worker.
   const tmuxSession = `claude-${answers.agentName}`;
   console.log('');
   if (role.role === 'master') {

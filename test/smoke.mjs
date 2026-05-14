@@ -107,6 +107,41 @@ const checks = [
     existsSync(join(TARGET, 'launchd/cron-example.plist')) &&
     readFileSync(join(TARGET, 'launchd/cron-example.plist'), 'utf8').includes(`com.hermit-agent.smoke-test.`) &&
     readFileSync(join(TARGET, 'launchd/cron-example.plist'), 'utf8').includes(TARGET)],
+  ['idle-hibernator.plist substituted (label + AGENT_DIR + HIBERNATOR_SELF)',
+    existsSync(join(TARGET, 'launchd/idle-hibernator.plist')) &&
+    (() => {
+      const s = readFileSync(join(TARGET, 'launchd/idle-hibernator.plist'), 'utf8');
+      return s.includes('com.hermit-agent.smoke-test.idle-hibernator')
+        && s.includes(`${TARGET}/scripts/idle-hibernator.sh`)
+        && s.includes('<key>HIBERNATOR_SELF</key>')
+        && s.includes('<string>smoke-test</string>');
+    })()],
+  ['wake-poller.plist substituted (label + AGENT_DIR + 60s interval)',
+    existsSync(join(TARGET, 'launchd/wake-poller.plist')) &&
+    (() => {
+      const s = readFileSync(join(TARGET, 'launchd/wake-poller.plist'), 'utf8');
+      return s.includes('com.hermit-agent.smoke-test.wake-poller')
+        && s.includes(`${TARGET}/scripts/wake-poller.sh`)
+        && s.includes('<integer>60</integer>');
+    })()],
+  ['hibernate-agent.sh + wake-agent.sh + idle-hibernator.sh + wake-poller.sh executable',
+    (() => {
+      try {
+        for (const f of ['hibernate-agent.sh', 'wake-agent.sh', 'idle-hibernator.sh', 'wake-poller.sh']) {
+          if ((statSync(join(TARGET, 'scripts', f)).mode & 0o111) === 0) return false;
+        }
+        return true;
+      } catch { return false; }
+    })()],
+  ['hibernate-agent.sh derives PROJ_DIR from agents_root_enc (portable convention)',
+    readFileSync(join(TARGET, 'scripts/hibernate-agent.sh'), 'utf8').includes('agents_root_enc=$(echo "$AGENTS_ROOT" | sed')],
+  ['idle-hibernator.sh respects HIBERNATOR_SELF env',
+    readFileSync(join(TARGET, 'scripts/idle-hibernator.sh'), 'utf8').includes('HIBERNATOR_SELF')],
+  ['wake-agent.sh auto-dismisses Resume-from-summary modal',
+    readFileSync(join(TARGET, 'scripts/wake-agent.sh'), 'utf8').includes('Resume from summary')],
+  ['multi-agent-status-report.sh recognizes paused.json (💤 hibernated)',
+    readFileSync(join(TARGET, 'scripts/multi-agent-status-report.sh'), 'utf8').includes('💤') &&
+    readFileSync(join(TARGET, 'scripts/multi-agent-status-report.sh'), 'utf8').includes('paused.json')],
   ['AGENTS.md has FIRST_RUN orientation rule',
     readFileSync(join(TARGET, 'AGENTS.md'), 'utf8').includes('If `FIRST_RUN.md` exists')],
   ['hook-tg-strip-markdown.sh exists and is executable',
@@ -412,6 +447,27 @@ const checks = [
       if (!existsSync(p)) return false;
       const s = readFileSync(p, 'utf8');
       return s.includes('OnUnitActiveSec=10min') && s.includes('Unit=hermit-smoke-test-status-reporter.service');
+    })()],
+  ['systemd/idle-hibernator.service has HIBERNATOR_SELF env',
+    (() => {
+      const p = join(TARGET, 'systemd/idle-hibernator.service');
+      if (!existsSync(p)) return false;
+      const s = readFileSync(p, 'utf8');
+      return s.includes('Environment=HIBERNATOR_SELF=smoke-test') && s.includes('idle-hibernator.sh');
+    })()],
+  ['systemd/idle-hibernator.timer fires every 10min',
+    (() => {
+      const p = join(TARGET, 'systemd/idle-hibernator.timer');
+      if (!existsSync(p)) return false;
+      const s = readFileSync(p, 'utf8');
+      return s.includes('OnUnitActiveSec=10min') && s.includes('Unit=hermit-smoke-test-idle-hibernator.service');
+    })()],
+  ['systemd/wake-poller.timer fires every 60s with AccuracySec',
+    (() => {
+      const p = join(TARGET, 'systemd/wake-poller.timer');
+      if (!existsSync(p)) return false;
+      const s = readFileSync(p, 'utf8');
+      return s.includes('OnUnitActiveSec=1min') && s.includes('AccuracySec') && s.includes('Unit=hermit-smoke-test-wake-poller.service');
     })()],
   ['scripts/systemd-sync.sh exists, is executable, has INSTALL/UPDATE verbs',
     (() => {

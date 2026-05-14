@@ -1,0 +1,11 @@
+[Unit]
+Description=Hermit agent {{AGENT_NAME}} idle-hibernator timer (every 10m)
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=10min
+Persistent=false
+Unit=hermit-{{AGENT_NAME}}-idle-hibernator.service
+
+[Install]
+WantedBy=timers.target

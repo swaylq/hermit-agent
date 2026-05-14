@@ -177,6 +177,24 @@ If you set up a heartbeat cron, default prompt:
 - **Proactive** (no permission needed): read/organize memory, `git status` checks, update docs, curate MEMORY.md.
 - **Memory maintenance**: every few days skim recent `memory/YYYY-MM-DD.md`, distill into MEMORY.md, drop outdated entries.
 
+## Hibernation (fleet feature)
+
+If multiple hermits live on this machine, the **master/coordinator** also runs an idle-hibernator and a wake-poller (auto-installed at scaffold time). Workers don't run these — only the master does the fleet-wide sweep. With a single hermit, both LaunchAgents/timers still run but no-op cheaply (idle-hibernator skips self via `HIBERNATOR_SELF`; wake-poller's fast path exits in <100ms when no `paused.json` exists anywhere).
+
+States are mutually exclusive:
+
+- `agent.pid` present, `paused.json` absent → **alive**
+- `agent.pid` absent, `paused.json` present → **hibernated** (`💤` in status digest)
+- both absent → **down** (`⚫` in status digest)
+
+Manual ops:
+
+- Sleep an agent: `scripts/hibernate-agent.sh <name>` — saves session_id + remain-on-exit + kills claude/bun/chrome
+- Wake an agent: `scripts/wake-agent.sh <name>` — respawns tmux pane with `claude --resume`, auto-picks "Resume from summary" for old/large sessions
+- Tail what the schedulers did: `tail -f .claude/state/{idle-hibernator,wake-poller}.log`
+
+The default idle threshold is **48h**; override with `IDLE_THRESHOLD_SEC=<seconds>` in the plist's `EnvironmentVariables`. Wake is triggered by any pending Telegram update to the hibernated agent's bot — the wake-poller checks every 60s, ACKs nothing (the freshly-respawned bun drains the queue with its own offset).
+
 ---
 
 <!-- MISSION-START -->

@@ -231,6 +231,25 @@ for dir in "$AGENTS_ROOT"/*/; do
   [ ! -f "$dir/CLAUDE.md" ] && continue
 
   pid_file="$dir/agent.pid"
+  paused_file="$dir/.claude/state/paused.json"
+
+  # Hibernated agents (idle-hibernator.sh wrote paused.json + removed agent.pid).
+  # Distinguish from "down" so the digest doesn't false-alarm; wake-poller.sh
+  # will respawn the agent on inbound Telegram.
+  if [ -f "$paused_file" ]; then
+    hibernated_at=$(jq -r '.hibernated_at // 0' "$paused_file" 2>/dev/null)
+    [ "$hibernated_at" = "null" ] && hibernated_at=0
+    if [ "$hibernated_at" -gt 0 ]; then
+      dur=$(fmt_duration $((now - hibernated_at)))
+      lines+=("💤 $name · hibernated $dur")
+    else
+      lines+=("💤 $name · hibernated")
+    fi
+    states_joined+="$name=paused;"
+    any_active=1
+    continue
+  fi
+
   alive=0
   if [ -f "$pid_file" ]; then
     pid=$(cat "$pid_file" 2>/dev/null)

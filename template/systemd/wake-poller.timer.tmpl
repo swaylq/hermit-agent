@@ -1,0 +1,12 @@
+[Unit]
+Description=Hermit agent {{AGENT_NAME}} wake-poller timer (every 60s)
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+Persistent=false
+AccuracySec=10s
+Unit=hermit-{{AGENT_NAME}}-wake-poller.service
+
+[Install]
+WantedBy=timers.target

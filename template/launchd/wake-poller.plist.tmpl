@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <!--
+    Wake-poller LaunchAgent for the coordinator (master hermit). Runs every
+    60 seconds; checks each hibernated agent's Telegram bot for pending
+    updates and wakes the agent if any are queued. Pairs with
+    scripts/idle-hibernator.sh — together they implement the agent-fleet
+    hibernation lifecycle.
+
+    Install:
+      cp launchd/wake-poller.plist.tmpl ~/Library/LaunchAgents/com.hermit-agent.{{AGENT_NAME}}.wake-poller.plist
+      launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.hermit-agent.{{AGENT_NAME}}.wake-poller.plist
+  -->
+  <dict>
+    <key>Label</key>
+    <string>com.hermit-agent.{{AGENT_NAME}}.wake-poller</string>
+
+    <key>ProgramArguments</key>
+    <array>
+      <string>/bin/bash</string>
+      <string>{{AGENT_DIR}}/scripts/wake-poller.sh</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>60</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>{{AGENT_DIR}}/.claude/state/wake-poller.launchd.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>{{AGENT_DIR}}/.claude/state/wake-poller.launchd.log</string>
+
+    <key>WorkingDirectory</key>
+    <string>{{AGENT_DIR}}</string>
+  </dict>
+</plist>

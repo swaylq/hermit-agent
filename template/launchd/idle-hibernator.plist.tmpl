@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <!--
+    Idle-hibernator LaunchAgent for the coordinator (master hermit).
+    Scans sibling agents every 10 minutes; hibernates any that have been
+    idle longer than IDLE_THRESHOLD_SEC (default 48h).
+
+    HIBERNATOR_SELF is the coordinator's agent name — it excludes itself
+    from the hibernate sweep (otherwise it would put the orchestrator to
+    sleep and leave the fleet without a wake-poller).
+
+    Install:
+      cp launchd/idle-hibernator.plist.tmpl ~/Library/LaunchAgents/com.hermit-agent.{{AGENT_NAME}}.idle-hibernator.plist
+      launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.hermit-agent.{{AGENT_NAME}}.idle-hibernator.plist
+  -->
+  <dict>
+    <key>Label</key>
+    <string>com.hermit-agent.{{AGENT_NAME}}.idle-hibernator</string>
+
+    <key>ProgramArguments</key>
+    <array>
+      <string>/bin/bash</string>
+      <string>{{AGENT_DIR}}/scripts/idle-hibernator.sh</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>HIBERNATOR_SELF</key>
+      <string>{{AGENT_NAME}}</string>
+    </dict>
+
+    <key>StartInterval</key>
+    <integer>600</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>{{AGENT_DIR}}/.claude/state/idle-hibernator.launchd.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>{{AGENT_DIR}}/.claude/state/idle-hibernator.launchd.log</string>
+
+    <key>WorkingDirectory</key>
+    <string>{{AGENT_DIR}}</string>
+  </dict>
+</plist>

@@ -1,0 +1,17 @@
+[Unit]
+# Wake-poller service. Paired with wake-poller.timer; installed by the
+# create-hermit-agent CLI only for the FIRST hermit on a machine (the
+# coordinator / master). Polls Telegram getUpdates for each hibernated
+# sibling agent and runs wake-agent.sh on any pending update.
+
+Description=Hermit agent {{AGENT_NAME}} wake-poller
+
+[Service]
+Type=oneshot
+WorkingDirectory={{AGENT_DIR}}
+
+ExecStartPre=/bin/mkdir -p {{AGENT_DIR}}/.claude/state
+ExecStart=/bin/bash {{AGENT_DIR}}/scripts/wake-poller.sh
+
+# Logs go to the systemd journal. View with:
+#   journalctl --user -u hermit-{{AGENT_NAME}}-wake-poller.service -f
