@@ -125,13 +125,14 @@ function checkPrereqs(host = 'claude') {
 
   // bun is only relevant for the claude flavor (the official telegram plugin
   // ships a bun server subprocess). Codex flavor uses a Python bridge, no bun.
+  // Hard prereq: a bun-less claude agent's Telegram plugin will silently fail
+  // to start (claude stays alive but the bun child never spawns), which is the
+  // worst kind of "looks installed but deaf" failure mode.
   let bunPath = null;
   if (host === 'claude') {
     bunPath = which('bun') || (existsSync(`${homedir()}/.bun/bin/bun`) ? `${homedir()}/.bun/bin/bun` : null);
     if (!bunPath) {
-      warn('bun not found. The Telegram plugin needs bun to run its server subprocess.');
-      warn('Install with: curl -fsSL https://bun.sh/install | bash   (then reopen your terminal)');
-      warn('Continuing — bun is only needed at agent runtime, not at scaffold time.');
+      die(`bun not found on PATH or at ~/.bun/bin/bun. The Telegram plugin's MCP server runs as a bun subprocess and will silently fail without it.\n  Install with: curl -fsSL https://bun.sh/install | bash   (then reopen your terminal)`);
     }
   }
 
