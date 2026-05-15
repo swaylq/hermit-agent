@@ -1,0 +1,13 @@
+[Unit]
+Description=Hermit agent {{AGENT_NAME}} reap-dead-sessions timer (daily 04:10)
+
+[Timer]
+OnCalendar=*-*-* 04:10:00
+# Persistent=true means catch up on a missed run after the user manager was
+# offline (e.g. server reboot at 03:30 — fire as soon as we're back). The
+# reaper is idempotent so a double-fire is harmless.
+Persistent=true
+Unit=hermit-{{AGENT_NAME}}-reap-dead-sessions.service
+
+[Install]
+WantedBy=timers.target

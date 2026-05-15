@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <!--
+    Dead-session reaper LaunchAgent for the master/coordinator hermit.
+    Runs daily at 04:10 — sweeps every sibling agent's
+    ~/.claude/projects/ dir and ships stale session JSONLs (and their
+    sidecar subdirs) to Trash. A session is reaped only when ALL three hold:
+      1. session_id != session-status.json .session_id (active)
+      2. session_id != paused.json .session_id        (hibernated wake target)
+      3. mtime older than REAP_AGE_DAYS (default 3)
+
+    Workers don't install this — only the master does the fleet-wide sweep.
+    Single-hermit users still get it; the script no-ops cheaply when nothing
+    qualifies.
+
+    Install:
+      cp launchd/reap-dead-sessions.plist.tmpl ~/Library/LaunchAgents/com.hermit-agent.{{AGENT_NAME}}.reap-dead-sessions.plist
+      launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.hermit-agent.{{AGENT_NAME}}.reap-dead-sessions.plist
+  -->
+  <dict>
+    <key>Label</key>
+    <string>com.hermit-agent.{{AGENT_NAME}}.reap-dead-sessions</string>
+
+    <key>ProgramArguments</key>
+    <array>
+      <string>/bin/bash</string>
+      <string>{{AGENT_DIR}}/scripts/reap-dead-sessions.sh</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+      <key>Hour</key>
+      <integer>4</integer>
+      <key>Minute</key>
+      <integer>10</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>{{AGENT_DIR}}/.claude/state/reap-dead-sessions.launchd.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>{{AGENT_DIR}}/.claude/state/reap-dead-sessions.launchd.log</string>
+
+    <key>WorkingDirectory</key>
+    <string>{{AGENT_DIR}}</string>
+  </dict>
+</plist>

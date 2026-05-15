@@ -1,0 +1,16 @@
+[Unit]
+# Dead-session reaper service. Paired with reap-dead-sessions.timer; installed
+# by the create-hermit-agent CLI only for the FIRST hermit on a machine (the
+# coordinator / master). Workers skip — the master runs the fleet-wide sweep.
+
+Description=Hermit agent {{AGENT_NAME}} reap-dead-sessions sweep
+
+[Service]
+Type=oneshot
+WorkingDirectory={{AGENT_DIR}}
+
+ExecStartPre=/bin/mkdir -p {{AGENT_DIR}}/.claude/state
+ExecStart=/bin/bash {{AGENT_DIR}}/scripts/reap-dead-sessions.sh
+
+# Logs go to the systemd journal. View with:
+#   journalctl --user -u hermit-{{AGENT_NAME}}-reap-dead-sessions.service -f

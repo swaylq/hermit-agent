@@ -195,6 +195,26 @@ Manual ops:
 
 The default idle threshold is **48h**; override with `IDLE_THRESHOLD_SEC=<seconds>` in the plist's `EnvironmentVariables`. Wake is triggered by any pending Telegram update to the hibernated agent's bot — the wake-poller checks every 60s, ACKs nothing (the freshly-respawned bun drains the queue with its own offset).
 
+## Dead-session reaper (fleet feature)
+
+The master also runs `scripts/reap-dead-sessions.sh` daily at 04:10 (LaunchAgent on macOS, systemd timer on Linux). Each Claude Code session writes a JSONL under `~/.claude/projects/<encoded-AGENTS_ROOT>-<agent>/`, and they accumulate fast — the reaper trims them once they're no longer needed.
+
+A session is reaped only when ALL three hold:
+
+1. `session_id` ≠ `<agent>/.claude/state/session-status.json` `.session_id` (active)
+2. `session_id` ≠ `<agent>/.claude/state/paused.json` `.session_id` (hibernated wake target)
+3. JSONL `mtime` older than `REAP_AGE_DAYS` (default 3 — buffer for manual `claude --resume`)
+
+Files go to the OS recycle bin (`/usr/bin/trash` on macOS, `gio trash` on Linux), so recovery is one drag away — never `rm`. Companion subdir at `<proj>/<sid>/` is reaped together.
+
+Manual ops:
+
+- Preview without touching anything: `scripts/reap-dead-sessions.sh --dry-run`
+- Wider buffer: `scripts/reap-dead-sessions.sh --age-days 14`
+- Tail history: `tail -f .claude/state/reap-dead-sessions.log`
+
+If `trash` / `gio` is missing the script refuses to run rather than `mv`-shuffle silently. Install with `brew install trash` (macOS) or your distro's GLib package (Linux).
+
 ---
 
 <!-- MISSION-START -->

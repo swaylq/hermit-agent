@@ -142,6 +142,40 @@ const checks = [
   ['multi-agent-status-report.sh recognizes paused.json (💤 hibernated)',
     readFileSync(join(TARGET, 'scripts/multi-agent-status-report.sh'), 'utf8').includes('💤') &&
     readFileSync(join(TARGET, 'scripts/multi-agent-status-report.sh'), 'utf8').includes('paused.json')],
+  ['reap-dead-sessions.plist substituted (label + script path + 04:10 schedule)',
+    existsSync(join(TARGET, 'launchd/reap-dead-sessions.plist')) &&
+    (() => {
+      const s = readFileSync(join(TARGET, 'launchd/reap-dead-sessions.plist'), 'utf8');
+      return s.includes('com.hermit-agent.smoke-test.reap-dead-sessions')
+        && s.includes(`${TARGET}/scripts/reap-dead-sessions.sh`)
+        && s.includes('<key>StartCalendarInterval</key>')
+        && s.includes('<integer>4</integer>')
+        && s.includes('<integer>10</integer>');
+    })()],
+  ['reap-dead-sessions.sh executable',
+    (() => { try { return (statSync(join(TARGET, 'scripts/reap-dead-sessions.sh')).mode & 0o111) !== 0; } catch { return false; } })()],
+  ['reap-dead-sessions.sh derives PROJ_DIR from agents_root_enc (portable convention)',
+    readFileSync(join(TARGET, 'scripts/reap-dead-sessions.sh'), 'utf8').includes('agents_root_enc=$(echo "$AGENTS_ROOT" | sed')],
+  ['reap-dead-sessions.sh checks both session-status.json and paused.json before reaping',
+    (() => {
+      const s = readFileSync(join(TARGET, 'scripts/reap-dead-sessions.sh'), 'utf8');
+      return s.includes('session-status.json') && s.includes('paused.json') && s.includes('is_protected');
+    })()],
+  ['reap-dead-sessions.sh refuses to run without a trash backend',
+    (() => {
+      const s = readFileSync(join(TARGET, 'scripts/reap-dead-sessions.sh'), 'utf8');
+      return s.includes('no trash backend') && s.includes('gio trash');
+    })()],
+  ['systemd/reap-dead-sessions.timer fires daily at 04:10',
+    (() => {
+      const p = join(TARGET, 'systemd/reap-dead-sessions.timer');
+      if (!existsSync(p)) return false;
+      const s = readFileSync(p, 'utf8');
+      return s.includes('OnCalendar=*-*-* 04:10:00')
+        && s.includes('hermit-smoke-test-reap-dead-sessions.service');
+    })()],
+  ['AGENTS.md documents the reap-dead-sessions sweep',
+    readFileSync(join(TARGET, 'AGENTS.md'), 'utf8').includes('Dead-session reaper')],
   ['AGENTS.md has FIRST_RUN orientation rule',
     readFileSync(join(TARGET, 'AGENTS.md'), 'utf8').includes('If `FIRST_RUN.md` exists')],
   ['hook-tg-strip-markdown.sh exists and is executable',

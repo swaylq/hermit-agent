@@ -840,6 +840,95 @@ function installHibernationSystemLinux(targetDir, agentName) {
   return { installed, failed };
 }
 
+// --- Dead-session reaper (master-only daily sweep) ---
+//
+// Daily at 04:10 — scans every sibling agent's ~/.claude/projects/<enc>/
+// directory and ships JSONLs (+ sidecar subdirs) older than REAP_AGE_DAYS
+// to the OS recycle bin. Active sessions and hibernated wake targets are
+// double-protected via session-status.json + paused.json. See the script's
+// header comment for the full reap policy.
+//
+// Master-only for the same reason as hibernation: single fleet-wide sweep,
+// not duplicated per worker.
+
+function installDeadSessionReaper(targetDir, agentName, role) {
+  if (role !== 'master') return { installed: false, failed: false };
+  if (IS_DARWIN) return installDeadSessionReaperDarwin(targetDir, agentName);
+  if (IS_LINUX) return installDeadSessionReaperLinux(targetDir, agentName);
+  return { installed: false, failed: false };
+}
+
+function installDeadSessionReaperDarwin(targetDir, agentName) {
+  step('Installing dead-session reaper LaunchAgent (daily 04:10)…');
+  const launchAgentsDir = join(homedir(), 'Library', 'LaunchAgents');
+  mkdirSync(launchAgentsDir, { recursive: true });
+
+  const srcPlist = join(targetDir, 'launchd', 'reap-dead-sessions.plist');
+  if (!existsSync(srcPlist)) {
+    warn('launchd/reap-dead-sessions.plist missing from scaffold — skipping.');
+    return { installed: false, failed: true };
+  }
+  const destPlist = join(launchAgentsDir, `com.hermit-agent.${agentName}.reap-dead-sessions.plist`);
+  try {
+    writeFileSync(destPlist, readFileSync(srcPlist));
+    chmodSync(destPlist, 0o644);
+  } catch (e) {
+    warn(`Could not copy reap-dead-sessions plist: ${e.message}\n  Install manually: cp ${srcPlist} ${destPlist} && launchctl load ${destPlist}`);
+    return { installed: false, failed: true };
+  }
+  const r = spawnSync('launchctl', ['load', destPlist], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    encoding: 'utf8',
+  });
+  if (r.status !== 0) {
+    warn(`launchctl load reap-dead-sessions exited ${r.status}. Output: ${(r.stderr || r.stdout || '').trim()}`);
+    warn(`Retry manually: launchctl load ${destPlist}`);
+    return { installed: false, failed: true };
+  }
+  ok('Dead-session reaper LaunchAgent loaded. Sweeps daily at 04:10, 3-day buffer.');
+  return { installed: true, failed: false };
+}
+
+function installDeadSessionReaperLinux(targetDir, agentName) {
+  step('Installing dead-session reaper systemd timer (daily 04:10)…');
+  const unitDir = process.env.XDG_CONFIG_HOME
+    ? join(process.env.XDG_CONFIG_HOME, 'systemd', 'user')
+    : join(homedir(), '.config', 'systemd', 'user');
+  mkdirSync(unitDir, { recursive: true });
+
+  const srcService = join(targetDir, 'systemd', 'reap-dead-sessions.service');
+  const srcTimer = join(targetDir, 'systemd', 'reap-dead-sessions.timer');
+  if (!existsSync(srcService) || !existsSync(srcTimer)) {
+    warn('systemd/reap-dead-sessions.{service,timer} missing — skipping.');
+    return { installed: false, failed: true };
+  }
+  const timerName = `hermit-${agentName}-reap-dead-sessions.timer`;
+  const serviceName = `hermit-${agentName}-reap-dead-sessions.service`;
+  const destService = join(unitDir, serviceName);
+  const destTimer = join(unitDir, timerName);
+  try {
+    writeFileSync(destService, readFileSync(srcService));
+    writeFileSync(destTimer, readFileSync(srcTimer));
+    chmodSync(destService, 0o644);
+    chmodSync(destTimer, 0o644);
+  } catch (e) {
+    warn(`Could not copy reap-dead-sessions units: ${e.message}`);
+    return { installed: false, failed: true };
+  }
+  const r = spawnSync('systemctl', ['--user', 'enable', '--now', timerName], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    encoding: 'utf8',
+  });
+  if (r.status !== 0) {
+    warn(`systemctl --user enable --now ${timerName} exited ${r.status}. Output: ${(r.stderr || r.stdout || '').trim()}`);
+    warn(`Retry manually: systemctl --user daemon-reload && systemctl --user enable --now ${timerName}`);
+    return { installed: false, failed: true };
+  }
+  spawnSync('systemctl', ['--user', 'daemon-reload'], { stdio: 'ignore' });
+  ok('Dead-session reaper systemd timer loaded. Sweeps daily at 04:10, 3-day buffer.');
+  return { installed: true, failed: false };
+}
+
 // --- Per-platform layer pruning ---
 //
 // The template ships everything: launchd + systemd templates, browser /
@@ -1555,7 +1644,10 @@ async function main() {
   // 7. Install hibernation system on the master only (idle-hibernator + wake-poller).
   installHibernationSystem(answers.targetDir, answers.agentName, role.role);
 
-  // 8. Final printout — distinguish master (coordinator) from worker.
+  // 8. Install dead-session reaper on the master only (daily Trash sweep of stale JSONLs).
+  installDeadSessionReaper(answers.targetDir, answers.agentName, role.role);
+
+  // 9. Final printout — distinguish master (coordinator) from worker.
   const tmuxSession = `claude-${answers.agentName}`;
   console.log('');
   if (role.role === 'master') {
