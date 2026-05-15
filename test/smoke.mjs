@@ -176,6 +176,18 @@ const checks = [
     })()],
   ['AGENTS.md documents the reap-dead-sessions sweep',
     readFileSync(join(TARGET, 'AGENTS.md'), 'utf8').includes('Dead-session reaper')],
+  ['multi-agent-status-report.sh skips self status-reporter to avoid 0s noise',
+    readFileSync(join(TARGET, 'scripts/multi-agent-status-report.sh'), 'utf8').includes('SELF_STATUS_REPORTER_LABEL')],
+  ['multi-agent-status-report.sh has check_cron_mtime + reap-dead-sessions hookup',
+    (() => {
+      const s = readFileSync(join(TARGET, 'scripts/multi-agent-status-report.sh'), 'utf8');
+      return s.includes('check_cron_mtime') && s.includes('reap-dead-sessions') && s.includes('86400');
+    })()],
+  ['multi-agent-status-report.sh check_interval_agent log-mtime fallback survives reboot',
+    (() => {
+      const s = readFileSync(join(TARGET, 'scripts/multi-agent-status-report.sh'), 'utf8');
+      return s.includes('effective_runs') && s.includes('log_mtime');
+    })()],
   ['AGENTS.md has FIRST_RUN orientation rule',
     readFileSync(join(TARGET, 'AGENTS.md'), 'utf8').includes('If `FIRST_RUN.md` exists')],
   ['hook-tg-strip-markdown.sh exists and is executable',

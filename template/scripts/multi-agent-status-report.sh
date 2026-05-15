@@ -467,7 +467,7 @@ check_daemon() {
 }
 
 check_interval_agent() {
-  local label=$1 display=$2 interval_sec=$3
+  local label=$1 display=$2 interval_sec=$3 log_path="${4:-}"
   local runs exit_code
   runs=$(launchctl_runs "$label")
   exit_code=$(launchctl_exit "$label")
@@ -480,11 +480,23 @@ check_interval_agent() {
   [ "$prev_runs" = "null" ] && prev_runs=0
   [ "$prev_ts" = "null" ] && prev_ts=0
 
+  # launchctl's `runs` counter resets to 0 on every load (reboot, plist edit,
+  # bootstrap). For tasks that have a log file, fall back to log mtime so a
+  # task that ran fine pre-reboot doesn't suddenly read "never ran".
   local current_ts
   if [ "$runs" -gt "$prev_runs" ] || [ "$prev_ts" -eq 0 ]; then
     current_ts=$now
   else
     current_ts=$prev_ts
+  fi
+  local effective_runs=$runs
+  if [ "$runs" -eq 0 ] && [ -n "$log_path" ] && [ -f "$log_path" ]; then
+    local log_mtime
+    log_mtime=$(stat -f %m "$log_path" 2>/dev/null || stat -c %Y "$log_path" 2>/dev/null)
+    if [ -n "$log_mtime" ] && [ "$log_mtime" -gt 0 ]; then
+      current_ts=$log_mtime
+      effective_runs=1
+    fi
   fi
 
   task_runs_entries+=("\"$label\":$runs")
@@ -497,7 +509,7 @@ check_interval_agent() {
     task_lines+=("🟥 $display · last exit $exit_code")
     states_joined+="tk_${display}=err${exit_code};"
     any_task_bad=1
-  elif [ "$runs" -eq 0 ]; then
+  elif [ "$effective_runs" -eq 0 ]; then
     task_lines+=("🟨 $display · never ran")
     states_joined+="tk_${display}=never;"
     any_task_bad=1
@@ -511,20 +523,63 @@ check_interval_agent() {
   fi
 }
 
+# Calendar-based task check (e.g. daily reaper). launchctl runs counter doesn't
+# carry meaningful timing for these — use log mtime directly.
+check_cron_mtime() {
+  local display=$1 log_path=$2 interval_sec=$3
+  if [ ! -f "$log_path" ]; then
+    task_lines+=("🟨 $display · never ran")
+    states_joined+="tk_${display}=never;"
+    any_task_bad=1
+    return
+  fi
+  local mtime age stale_threshold
+  mtime=$(stat -f %m "$log_path" 2>/dev/null || stat -c %Y "$log_path" 2>/dev/null)
+  age=$((now - mtime))
+  stale_threshold=$((interval_sec * 3 / 2))
+  if [ "$age" -gt "$stale_threshold" ]; then
+    task_lines+=("🟨 $display · stale $(fmt_duration $age)")
+    states_joined+="tk_${display}=stale;"
+    any_task_bad=1
+  else
+    task_lines+=("🟢 $display · ran $(fmt_duration $age) ago")
+    states_joined+="tk_${display}=ok;"
+  fi
+}
+
 # Auto-discover hermit-agent LaunchAgent plists. Convention:
 #   com.hermit-agent.<agent>.<task>.plist
 # Display name drops the `com.hermit-agent.` prefix so it reads "<agent>.<task>".
-# Skips plists that don't have a StartInterval (e.g., pure KeepAlive daemons —
-# users wanting those can call check_daemon explicitly).
+# Skips:
+#   - plists without StartInterval (calendar-based tasks like reap-dead-sessions
+#     are checked separately via check_cron_mtime below)
+#   - this agent's own status-reporter (it always reads "ran 0s ago" — by definition,
+#     if you're reading this digest, the reporter just fired)
+SELF_STATUS_REPORTER_LABEL="com.hermit-agent.${HUB_NAME}.status-reporter"
 for plist in "$HOME"/Library/LaunchAgents/com.hermit-agent.*.plist; do
   [ -f "$plist" ] || continue
   label=$(/usr/libexec/PlistBuddy -c "Print :Label" "$plist" 2>/dev/null)
   interval=$(/usr/libexec/PlistBuddy -c "Print :StartInterval" "$plist" 2>/dev/null)
   [ -z "$label" ] && continue
   [ -z "$interval" ] && continue
+  [ "$label" = "$SELF_STATUS_REPORTER_LABEL" ] && continue
   display="${label#com.hermit-agent.}"
-  check_interval_agent "$label" "$display" "$interval"
+  # Convention: <agent>/.claude/state/<task>.log lets us recover from launchctl
+  # runs counter resets (reboot etc.) by reading log mtime as fallback.
+  agent_part="${label#com.hermit-agent.}"
+  agent_name="${agent_part%%.*}"
+  task_name="${agent_part#*.}"
+  log_path="$AGENTS_ROOT/$agent_name/.claude/state/${task_name}.log"
+  check_interval_agent "$label" "$display" "$interval" "$log_path"
 done
+
+# Calendar-based tasks (no StartInterval, so the auto-discover loop skips them).
+# reap-dead-sessions fires daily at 04:10 — tolerance 36h (1.5× day) before stale.
+SELF_REAPER_PLIST="$HOME/Library/LaunchAgents/com.hermit-agent.${HUB_NAME}.reap-dead-sessions.plist"
+if [ -f "$SELF_REAPER_PLIST" ]; then
+  reaper_log="$HUB_DIR/.claude/state/reap-dead-sessions.log"
+  check_cron_mtime reap-dead-sessions "$reaper_log" 86400
+fi
 
 # ---------- Exit if nothing to say ----------
 [ "$any_active" -eq 0 ] && [ ${#down_list[@]} -eq 0 ] && [ "$any_task_bad" -eq 0 ] && exit 0
