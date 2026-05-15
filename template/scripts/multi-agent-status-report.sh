@@ -581,6 +581,35 @@ if [ -f "$SELF_REAPER_PLIST" ]; then
   check_cron_mtime reap-dead-sessions "$reaper_log" 86400
 fi
 
+# Chrome CDP port collision check — two sibling agents claiming the same port
+# means one of them is talking to the wrong Chrome (one IPv4, one fell back to
+# IPv6 via Chrome's silent dual-stack rebind). Scan all sibling chrome.json
+# files; flag any port claimed by 2+ live agents. Defense in depth on top of
+# the deterministic-port + force-IPv4 fixes in chrome-launcher.sh.
+declare -A cdp_port_owners=()
+cdp_collisions=()
+for cj in "$AGENTS_ROOT"/*/browser/chrome.json; do
+  [ -f "$cj" ] || continue
+  agent_name=$(basename "$(dirname "$(dirname "$cj")")")
+  cport=$(jq -r '.cdp_port // empty' "$cj" 2>/dev/null)
+  cpid=$(jq -r '.pid // empty' "$cj" 2>/dev/null)
+  [ -z "$cport" ] && continue
+  [ -z "$cpid" ] || [ "$cpid" = "null" ] && continue
+  kill -0 "$cpid" 2>/dev/null || continue
+  if [ -n "${cdp_port_owners[$cport]:-}" ]; then
+    cdp_collisions+=("port $cport: ${cdp_port_owners[$cport]} ↔ $agent_name")
+    cdp_port_owners[$cport]="${cdp_port_owners[$cport]},$agent_name"
+  else
+    cdp_port_owners[$cport]="$agent_name"
+  fi
+done
+for collision in "${cdp_collisions[@]:-}"; do
+  [ -z "$collision" ] && continue
+  task_lines+=("🟥 chrome-cdp · collision · $collision")
+  states_joined+="tk_chrome_cdp=collision_${collision// /_};"
+  any_task_bad=1
+done
+
 # ---------- Exit if nothing to say ----------
 [ "$any_active" -eq 0 ] && [ ${#down_list[@]} -eq 0 ] && [ "$any_task_bad" -eq 0 ] && exit 0
 

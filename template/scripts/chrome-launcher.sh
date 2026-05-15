@@ -39,13 +39,46 @@ if [ -z "$CHROME_BIN" ]; then
   fi
 fi
 
+# Deterministic per-agent port. Hash agent name to a stable offset within
+# 19900-19999 so two sibling hermits never compete for the same slot. Sidesteps
+# the find_free_port TOCTOU race where lsof saw the port free during a brief
+# Chrome restart window and two agents ended up sharing the same port (one
+# IPv4, one IPv6 — the upstream asst hub hit this 2026-05-15 between two agents).
+deterministic_port() {
+  local name=$1
+  local offset
+  offset=$(printf '%s' "$name" | cksum | awk '{print $1 % 100}')
+  echo $((19900 + offset))
+}
+
+# Returns 0 if any other sibling agent's chrome.json claims this port AND
+# that PID is alive. Hash collisions are rare (100 slots) but not impossible.
+sibling_owns_port() {
+  local port=$1 self_dir=$2
+  local agents_root
+  agents_root="$(cd "$self_dir/.." && pwd)"
+  local cj
+  for cj in "$agents_root"/*/browser/chrome.json; do
+    [ -f "$cj" ] || continue
+    case "$cj" in "$self_dir/browser/chrome.json") continue ;; esac
+    local sib_port sib_pid
+    sib_port=$(python3 -c "import json; print(json.load(open('$cj')).get('cdp_port', ''))" 2>/dev/null || true)
+    sib_pid=$(python3 -c "import json; print(json.load(open('$cj')).get('pid', ''))" 2>/dev/null || true)
+    [ "$sib_port" = "$port" ] && [ -n "$sib_pid" ] && kill -0 "$sib_pid" 2>/dev/null && return 0
+  done
+  return 1
+}
+
 find_free_port() {
+  # Linear fallback for when the deterministic port is taken (hash collision,
+  # external process, etc). Skip ports owned by live sibling agents even if
+  # their Chrome isn't currently bound (covers the launch-window race).
   local port
   for port in $(seq 19900 19999); do
-    if ! lsof -i ":$port" &>/dev/null; then
-      echo "$port"
-      return 0
-    fi
+    lsof -i ":$port" &>/dev/null && continue
+    sibling_owns_port "$port" "$AGENT_DIR" && continue
+    echo "$port"
+    return 0
   done
   echo "❌ No free port in 19900-19999 range" >&2
   exit 1
@@ -121,13 +154,24 @@ with open(state_path, "w") as f:
     json.dump(state, f)
 PY
 
+  # Pick port: try deterministic (hash of agent name) first, fall back to scan.
   local port
-  port=$(find_free_port)
+  port=$(deterministic_port "$AGENT_NAME")
+  if lsof -i ":$port" &>/dev/null || sibling_owns_port "$port" "$AGENT_DIR"; then
+    echo "ℹ️  Deterministic port $port taken; scanning…" >&2
+    port=$(find_free_port)
+  fi
 
   echo "🚀 Launching Chrome as profile \"$AGENT_NAME\" (CDP port: $port)..."
 
+  # --remote-debugging-address=127.0.0.1 pins CDP to IPv4 explicitly. Chrome's
+  # default behavior on macOS is to silently fall back to [::1] when 127.0.0.1:port
+  # is taken, which corrupts ownership tracking — chrome.json says "we own port X"
+  # but Chrome is actually listening on a different IP family. Forcing IPv4 makes
+  # port conflicts hard-fail instead of silently rebinding.
   nohup "$CHROME_BIN" \
     --remote-debugging-port="$port" \
+    --remote-debugging-address=127.0.0.1 \
     --user-data-dir="$USER_DATA_DIR" \
     --no-first-run \
     --no-default-browser-check \

@@ -207,6 +207,23 @@ const checks = [
     })()],
   ['AGENTS.md forbids AskUserQuestion in Telegram Replies rules',
     readFileSync(join(TARGET, 'AGENTS.md'), 'utf8').includes('Never call AskUserQuestion')],
+  ['chrome-launcher.sh deterministic_port hashes agent name',
+    (() => {
+      const s = readFileSync(join(TARGET, 'scripts/chrome-launcher.sh'), 'utf8');
+      return s.includes('deterministic_port') && s.includes('cksum') && s.includes('% 100');
+    })()],
+  ['chrome-launcher.sh forces IPv4-only via --remote-debugging-address',
+    readFileSync(join(TARGET, 'scripts/chrome-launcher.sh'), 'utf8').includes('--remote-debugging-address=127.0.0.1')],
+  ['chrome-launcher.sh sibling_owns_port cross-checks chrome.json files',
+    (() => {
+      const s = readFileSync(join(TARGET, 'scripts/chrome-launcher.sh'), 'utf8');
+      return s.includes('sibling_owns_port') && s.includes('chrome.json');
+    })()],
+  ['multi-agent-status-report.sh detects chrome-cdp port collisions',
+    (() => {
+      const s = readFileSync(join(TARGET, 'scripts/multi-agent-status-report.sh'), 'utf8');
+      return s.includes('cdp_port_owners') && s.includes('chrome-cdp') && s.includes('collision');
+    })()],
   ['AGENTS.md has FIRST_RUN orientation rule',
     readFileSync(join(TARGET, 'AGENTS.md'), 'utf8').includes('If `FIRST_RUN.md` exists')],
   ['hook-tg-strip-markdown.sh exists and is executable',
