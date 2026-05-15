@@ -188,6 +188,25 @@ const checks = [
       const s = readFileSync(join(TARGET, 'scripts/multi-agent-status-report.sh'), 'utf8');
       return s.includes('effective_runs') && s.includes('log_mtime');
     })()],
+  ['hook-block-askuserquestion.sh present, executable, denies AskUserQuestion',
+    (() => {
+      try {
+        const p = join(TARGET, 'scripts/hook-block-askuserquestion.sh');
+        if ((statSync(p).mode & 0o111) === 0) return false;
+        const s = readFileSync(p, 'utf8');
+        return s.includes('"AskUserQuestion"') && s.includes('"deny"');
+      } catch { return false; }
+    })()],
+  ['settings.local.json wires AskUserQuestion → hook-block-askuserquestion.sh',
+    (() => {
+      const p = join(TARGET, '.claude/settings.local.json');
+      if (!existsSync(p)) return false;
+      const s = readFileSync(p, 'utf8');
+      return s.includes('"matcher": "AskUserQuestion"')
+        && s.includes('hook-block-askuserquestion.sh');
+    })()],
+  ['AGENTS.md forbids AskUserQuestion in Telegram Replies rules',
+    readFileSync(join(TARGET, 'AGENTS.md'), 'utf8').includes('Never call AskUserQuestion')],
   ['AGENTS.md has FIRST_RUN orientation rule',
     readFileSync(join(TARGET, 'AGENTS.md'), 'utf8').includes('If `FIRST_RUN.md` exists')],
   ['hook-tg-strip-markdown.sh exists and is executable',

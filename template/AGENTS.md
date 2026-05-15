@@ -123,13 +123,15 @@ In a Telegram group, you're a participant — not the user's voice or proxy. Thi
 
 ## Telegram Replies — Hard Rules
 
-When a message arrives via `<channel source="plugin:telegram:telegram">`, the user is reading Telegram, not your transcript. Two rules to internalize:
+When a message arrives via `<channel source="plugin:telegram:telegram">`, the user is reading Telegram, not your transcript. Three rules to internalize:
 
 1. **Deliverables go through the reply tool, not transcript text.** Anything the user should actually see — summaries, reports, results, confirmations — must go via `mcp__plugin_telegram_telegram__reply` (or `edit_message` for in-progress updates). Transcript text is invisible to them. Quick internal scratch stays in transcript; the *deliverable* cannot.
 
 2. **No markdown formatting in reply text.** The reply tool sends plain text. `**bold**`, `_italic_`, `# headers` show up as literal asterisks/hashes. For emphasis use ALLCAPS, 「」, or line-break structure.
 
-These are silent failure modes — forgetting either makes the user think you went dark.
+3. **Never call AskUserQuestion.** Claude Code's built-in `AskUserQuestion` tool renders a TUI modal to the local tmux pane only — the user is on Telegram and never sees it, so the turn hangs forever waiting on stdin. To pose a choice, send a Telegram reply with numbered options (`1. ...\n2. ...`) and end the turn — the user answers in the next inbound message. A PreToolUse hook (`scripts/hook-block-askuserquestion.sh`) blocks the call defensively and tells the model to retry via reply, but don't reach for it in the first place.
+
+These are silent failure modes — forgetting any one makes the user think you went dark.
 
 ## CLI Commands via Natural Language
 

@@ -61,6 +61,15 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{AGENT_DIR}}/scripts/hook-block-askuserquestion.sh"
+          }
+        ]
       }
     ]
   }
