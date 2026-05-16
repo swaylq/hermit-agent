@@ -44,6 +44,13 @@ cmd_start() {
     return 0
   fi
 
+  # Re-apply the local telegram-plugin orphan-watchdog patch before the
+  # first bun spawn. Idempotent and a no-op if the patch script isn't
+  # present or the upstream code has changed.
+  if [ -x "$DIR/scripts/patch-telegram-plugin.sh" ]; then
+    "$DIR/scripts/patch-telegram-plugin.sh" || true
+  fi
+
   tmux new-session -d -s "$SESSION" -x 200 -y 50 "$CMD"
   sleep 4
 

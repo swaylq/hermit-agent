@@ -224,6 +224,21 @@ const checks = [
       const s = readFileSync(join(TARGET, 'scripts/multi-agent-status-report.sh'), 'utf8');
       return s.includes('cdp_port_owners') && s.includes('chrome-cdp') && s.includes('collision');
     })()],
+  ['patch-telegram-plugin.sh present, executable, idempotent',
+    (() => {
+      try {
+        const p = join(TARGET, 'scripts/patch-telegram-plugin.sh');
+        if ((statSync(p).mode & 0o111) === 0) return false;
+        const s = readFileSync(p, 'utf8');
+        return s.includes('bootPpid') && s.includes('already patched') && s.includes('marketplaces/claude-plugins-official');
+      } catch { return false; }
+    })()],
+  ['start.sh + restart.sh call patch-telegram-plugin.sh before bun spawn',
+    (() => {
+      const start = readFileSync(join(TARGET, 'start.sh'), 'utf8');
+      const restart = readFileSync(join(TARGET, 'restart.sh'), 'utf8');
+      return start.includes('patch-telegram-plugin.sh') && restart.includes('patch-telegram-plugin.sh');
+    })()],
   ['AGENTS.md has FIRST_RUN orientation rule',
     readFileSync(join(TARGET, 'AGENTS.md'), 'utf8').includes('If `FIRST_RUN.md` exists')],
   ['hook-tg-strip-markdown.sh exists and is executable',

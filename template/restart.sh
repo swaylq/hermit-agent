@@ -26,6 +26,14 @@ fi
 
 CMD="cd $DIR && $CLAUDE_BIN --dangerously-skip-permissions --channels $CHANNEL"
 
+# Re-apply the local telegram-plugin orphan-watchdog patch before respawning.
+# Claude plugin sync can overwrite ~/.claude/plugins from GCS, and the patch
+# only takes effect for the bun that spawns next. Idempotent; no-op if
+# already patched or if the patch script isn't present.
+if [ -x "$DIR/scripts/patch-telegram-plugin.sh" ]; then
+  "$DIR/scripts/patch-telegram-plugin.sh" >> "$LOG" 2>&1
+fi
+
 echo "[$(date)] Restart initiated, old PID=$OLD_PID, bin=$CLAUDE_BIN" >> "$LOG"
 
 # Allow current session to flush Telegram replies
