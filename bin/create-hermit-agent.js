@@ -1485,6 +1485,7 @@ async function runCodexFlow(values, positional, prereqs) {
   const vars = {
     AGENT_NAME:           answers.agentName,
     AGENT_DISPLAY_NAME:   answers.displayName,
+    HOME:                 process.env.HOME || '',
     PERSONA:              answers.persona,
     USER_NAME:            answers.userName,
     USER_TG_ID:           answers.userTgId,
@@ -1608,6 +1609,7 @@ async function main() {
   const vars = {
     AGENT_NAME:           answers.agentName,
     AGENT_DISPLAY_NAME:   answers.displayName,
+    HOME:                 process.env.HOME || '',
     PERSONA:              answers.persona,
     USER_NAME:            answers.userName,
     USER_TG_ID:           answers.userTgId,

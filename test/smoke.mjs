@@ -53,6 +53,7 @@ const vars = {
   AGENT_DIR:          TARGET,
   STATE_DIR:          '/tmp/hermit-smoke-state',
   CLAUDE_BIN:         '/usr/local/bin/claude',
+  HOME:               process.env.HOME || '',
 };
 
 walkCopy(TEMPLATE_DIR, TARGET, vars);
@@ -107,6 +108,15 @@ const checks = [
     existsSync(join(TARGET, 'launchd/cron-example.plist')) &&
     readFileSync(join(TARGET, 'launchd/cron-example.plist'), 'utf8').includes(`com.hermit-agent.smoke-test.`) &&
     readFileSync(join(TARGET, 'launchd/cron-example.plist'), 'utf8').includes(TARGET)],
+  ['cron-example plist includes EnvironmentVariables PATH with substituted HOME',
+    (() => {
+      const p = join(TARGET, 'launchd/cron-example.plist');
+      if (!existsSync(p)) return false;
+      const s = readFileSync(p, 'utf8');
+      return s.includes('<key>EnvironmentVariables</key>')
+        && s.includes(`${process.env.HOME}/.local/bin`)
+        && !s.includes('{{HOME}}');
+    })()],
   ['idle-hibernator.plist substituted (label + AGENT_DIR + HIBERNATOR_SELF)',
     existsSync(join(TARGET, 'launchd/idle-hibernator.plist')) &&
     (() => {
@@ -525,6 +535,12 @@ const checks = [
       const s = readFileSync(p, 'utf8');
       return s.includes(`smoke-test`) && s.includes(TARGET) && !s.includes('{{');
     })()],
+  ['systemd/cron-example.service Environment=PATH includes %h/.local/bin',
+    (() => {
+      const p = join(TARGET, 'systemd/cron-example.service');
+      if (!existsSync(p)) return false;
+      return /^Environment=PATH=%h\/\.local\/bin:/m.test(readFileSync(p, 'utf8'));
+    })()],
   ['systemd/cron-example.timer references prefixed service unit',
     (() => {
       const p = join(TARGET, 'systemd/cron-example.timer');
@@ -600,6 +616,7 @@ const codexVars = {
   AGENT_DIR:          TARGET_CODEX,
   STATE_DIR:          TARGET_CODEX,
   CLAUDE_BIN:         '',
+  HOME:               process.env.HOME || '',
 };
 
 walkCopy(TEMPLATE_CODEX_DIR, TARGET_CODEX, codexVars);

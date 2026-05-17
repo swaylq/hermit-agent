@@ -225,13 +225,13 @@ asst's `cron` skill handles it. Tasks that must survive restarts go through the 
 
 ### macOS (launchd)
 
-1. Drop a plist into your agent's `launchd/` folder — copy `launchd/cron-example.plist.tmpl`, set `Label` to `com.hermit-agent.<agent>.cron-<task>`, and point `ProgramArguments` at whatever you want run. Wrap the real work in `scripts/with-timeout.sh 1200` — 20 min is the ceiling, not a target.
+1. Drop a plist into your agent's `launchd/` folder — copy `launchd/cron-example.plist.tmpl`, set `Label` to `com.hermit-agent.<agent>.cron-<task>`, and point `ProgramArguments` at whatever you want run. Wrap the real work in `scripts/with-timeout.sh 1200` — 20 min is the ceiling, not a target. **Keep the template's `EnvironmentVariables` PATH block** — launchd's default PATH excludes `~/.local/bin` (where Claude Code installs `claude`), and tasks silently exit 127 after the next CLI upgrade without it.
 2. Sync to the live LaunchAgents dir: `./scripts/launchd-sync.sh .` (idempotent: `LOADED` new, `RELOAD` changed, skip unchanged; `--dry-run` to preview).
 3. Confirm: `launchctl list | grep com.hermit-agent.<agent>`.
 
 ### Linux (systemd-user)
 
-1. Drop a `.service` + `.timer` pair into your agent's `systemd/` folder — copy `systemd/cron-example.service` and `systemd/cron-example.timer`, edit `ExecStart` (point it at your script) and the `OnUnitActiveSec` cadence. Wrap the real work in `scripts/with-timeout.sh 1200`.
+1. Drop a `.service` + `.timer` pair into your agent's `systemd/` folder — copy `systemd/cron-example.service` and `systemd/cron-example.timer`, edit `ExecStart` (point it at your script) and the `OnUnitActiveSec` cadence. Wrap the real work in `scripts/with-timeout.sh 1200`. **Keep the `Environment=PATH=…` line** — systemd-user's default PATH excludes `~/.local/bin` and `claude` won't resolve without it.
 2. Sync to `~/.config/systemd/user/`: `./scripts/systemd-sync.sh .` (idempotent: `INSTALL` new, `UPDATE` changed, skip unchanged; `--dry-run` to preview). The script `daemon-reload`s and `enable --now`s every timer it finds, and warns if lingering isn't enabled.
 3. Confirm: `systemctl --user list-timers 'hermit-<agent>-*'`. Tail logs with `journalctl --user -u hermit-<agent>-<task>.service -f`.
 

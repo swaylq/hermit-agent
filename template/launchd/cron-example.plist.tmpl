@@ -50,5 +50,20 @@
     <!-- Optional but useful if the script uses relative paths. -->
     <key>WorkingDirectory</key>
     <string>{{AGENT_DIR}}</string>
+
+    <!-- PATH: launchd's default doesn't include ~/.local/bin (where Claude
+         Code's `claude` lives since the v2.1.143 install reshuffle). Without
+         this block, the moment your script calls `claude` — even just
+         `claude --version` — launchd returns "command not found" and the
+         task silently exits 127. Past incident: 2026-05-17, a distill-daily
+         cron ran fine for days, then died at 04:00 the morning after a
+         Claude Code upgrade re-pointed the binary to ~/.local/bin.
+         {{HOME}} substitutes to your absolute home dir; launchd cannot
+         expand $HOME itself. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>PATH</key>
+      <string>{{HOME}}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
   </dict>
 </plist>

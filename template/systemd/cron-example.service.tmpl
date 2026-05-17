@@ -21,6 +21,12 @@ Description=Hermit agent {{AGENT_NAME}} cron task: EXAMPLE-TASK
 Type=oneshot
 WorkingDirectory={{AGENT_DIR}}
 
+# PATH: systemd-user's default doesn't include ~/.local/bin (where Claude
+# Code's `claude` lives since v2.1.143). Without this line, the moment your
+# script calls `claude` systemd returns "command not found" and the unit
+# exits 127 silently. The %h specifier expands to the user's home dir.
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin
+
 # Make sure .claude/state/ exists before the task runs — many tasks write
 # state files there. Cheap to do unconditionally.
 ExecStartPre=/bin/mkdir -p {{AGENT_DIR}}/.claude/state
