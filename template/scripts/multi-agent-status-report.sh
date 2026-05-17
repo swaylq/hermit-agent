@@ -99,11 +99,17 @@ pane_state_check() {
     echo "churning"
     return
   fi
-  # Idle prompt within last 6 lines. Two forms:
+  # Idle prompt within last 6 lines. Three forms:
   #   `❯ `         — empty input box
   #   `❯ Try "…"`  — Claude Code v2.x rotating placeholder suggestions
-  # Both mean "not running a turn".
-  if echo "$trimmed" | tail -6 | grep -qE "^❯[[:space:]]*$|^❯[[:space:]]+Try "; then
+  #   `❯ <text>`   — user typed (or got pasted) something but didn't Enter —
+  #                  still idle, just waiting for submit. The earlier churning
+  #                  check already rules out active turns (matches verb prefix
+  #                  minus " for [0-9]+" tail), so any line starting with `❯`
+  #                  at this point is idle regardless of input-box contents.
+  # (Past incident: 2026-05-17 master-skill held `❯ 全部 commit` after a 529
+  # turn-abort; status digest fired 🟥 stuck 1h42m for a fully idle agent.)
+  if echo "$trimmed" | tail -6 | grep -qE "^❯([[:space:]]*$|[[:space:]]+.+$)"; then
     echo "idle"
     return
   fi
