@@ -142,6 +142,35 @@ plugin_check() {
   fi
 }
 
+# /loop dynamic-mode detector. A `/loop <prompt>` running in dynamic mode ends
+# each tick with a ScheduleWakeup tool call and goes idle until the wakeup
+# fires (interval can be up to 3600s). During that wait:
+#   - session-status state=running (the /loop is the active "turn")
+#   - last_tool_ts is stale (from when the last tick ran)
+#   - pane is idle (❯ prompt)
+# Without this check, the existing stuck heuristic (`running + progress_since
+# >= 300s`) misfires as 🟥 stuck on a perfectly healthy agent waiting between
+# ticks. Past incident: agent flagged stuck 8h+ while sitting between hourly
+# /loop wakeups — pane idle, JSONL full of ScheduleWakeup tool history.
+# Returns: loop_pending | clean
+loop_dynamic_check() {
+  local agent=$1
+  local proj="$HOME/.claude/projects/-Users-mac-claudeclaw-${agent}"
+  [ -d "$proj" ] || { echo "clean"; return; }
+  local latest
+  latest=$(ls -t "$proj"/*.jsonl 2>/dev/null | head -1)
+  [ -z "$latest" ] && { echo "clean"; return; }
+  # ScheduleWakeup tool_use appears in the assistant entry's content array; its
+  # tool_result follows a few lines later. Either appearance in the JSONL tail
+  # is sufficient — between ticks there are only system + tool_result entries
+  # appended after the wakeup call, all within ~30 lines.
+  if tail -30 "$latest" 2>/dev/null | grep -q '"name":"ScheduleWakeup"\|"Next wakeup scheduled"'; then
+    echo "loop_pending"
+  else
+    echo "clean"
+  fi
+}
+
 # Error-marker scan in the last ~30 pane lines. Distinguishes genuine
 # token-revocation (manual /login required) from transient backend 403
 # (often self-recovers, or a single nudge revives the turn).
@@ -303,6 +332,17 @@ for dir in "$AGENTS_ROOT"/*/; do
     computed=idle
   fi
 
+  # /loop dynamic-mode short-circuit. If the agent is between scheduled wakeups
+  # of a long-running /loop, state=running is correct and last_tool age is
+  # expected to be large. Detect this BEFORE the pane / 403 paths so we don't
+  # false-flag, self-heal-reset, or otherwise disrupt a healthy /loop agent.
+  if [ "$computed" = "stuck" ]; then
+    loop_state=$(loop_dynamic_check "$name")
+    if [ "$loop_state" = "loop_pending" ]; then
+      computed=loop_pending
+    fi
+  fi
+
   # Self-heal + 403/token-invalid handling.
   # - state=running stuck + pane idle: Stop hook likely missed (TLS/500/AUP abort)
   #   OR an API 403 aborted the turn. Distinguish via pane_error_check:
@@ -419,6 +459,10 @@ for dir in "$AGENTS_ROOT"/*/; do
     403_escalated)
       lines+=("🆘 $name · 403 persists after nudge — manual investigation")
       any_stuck=1
+      ;;
+    loop_pending)
+      tick_age=$(fmt_duration $((now - last_tool)))
+      lines+=("🟡 $name · /loop waiting (last tick ${tick_age} ago)")
       ;;
   esac
 
