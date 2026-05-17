@@ -84,11 +84,18 @@ pane_state_check() {
   local pane
   pane=$(tmux capture-pane -t "$session" -p 2>/dev/null)
   [ -z "$pane" ] && { echo "unknown"; return; }
+  # Strip trailing blank lines before windowing. tmux capture-pane returns the
+  # full pane height (50 rows for the standard restart.sh layout); a freshly
+  # restarted agent with only ~10 lines of content leaves ~40 trailing blanks,
+  # so plain `tail -6` scrapes only emptiness and returns "unknown" → self-heal
+  # never fires and session-status stays stuck at running indefinitely.
+  local trimmed
+  trimmed=$(echo "$pane" | awk '{a[NR]=$0; if(NF)last=NR} END {for(i=1;i<=last;i++) print a[i]}')
   # Reject completion summaries like "✻ Brewed for 2m 11s" — they share the
   # verb prefix with the active form ("Brewing") and would false-positive as
   # churning, defeating the self-heal path. The "for [0-9]" anchor matches the
   # duration tail Claude Code prints after a turn finishes.
-  if echo "$pane" | tail -6 | grep -E "^[[:space:]]*[✻✢][[:space:]]+(Churn|Cook|Brew|Work|Think|Compact|Running|Saut|Crunch|Actualiz|Cogit|Ponder|Simmer|Processing|Stew|Grilling|Bak|Roast|Digest)" | grep -qvE " for [0-9]+"; then
+  if echo "$trimmed" | tail -6 | grep -E "^[[:space:]]*[✻✢][[:space:]]+(Churn|Cook|Brew|Work|Think|Compact|Running|Saut|Crunch|Actualiz|Cogit|Ponder|Simmer|Processing|Stew|Grilling|Bak|Roast|Digest)" | grep -qvE " for [0-9]+"; then
     echo "churning"
     return
   fi
@@ -96,7 +103,7 @@ pane_state_check() {
   #   `❯ `         — empty input box
   #   `❯ Try "…"`  — Claude Code v2.x rotating placeholder suggestions
   # Both mean "not running a turn".
-  if echo "$pane" | tail -6 | grep -qE "^❯[[:space:]]*$|^❯[[:space:]]+Try "; then
+  if echo "$trimmed" | tail -6 | grep -qE "^❯[[:space:]]*$|^❯[[:space:]]+Try "; then
     echo "idle"
     return
   fi
@@ -138,7 +145,9 @@ pane_error_check() {
   local pane recent
   pane=$(tmux capture-pane -t "$session" -p 2>/dev/null)
   [ -z "$pane" ] && { echo "clean"; return; }
-  recent=$(echo "$pane" | tail -30)
+  # Same trailing-blank trim as pane_state_check — tail -30 on a 50-line pane
+  # with 40 trailing blanks would scrape mostly emptiness and miss API errors.
+  recent=$(echo "$pane" | awk '{a[NR]=$0; if(NF)last=NR} END {for(i=1;i<=last;i++) print a[i]}' | tail -30)
   if echo "$recent" | grep -qE "Account is no longer a member|organization associated with this token"; then
     echo "token_invalid"
   elif echo "$recent" | grep -qE "API Error: 403|Please run /login"; then
