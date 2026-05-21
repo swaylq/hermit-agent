@@ -277,6 +277,39 @@ const checks = [
       const s = readFileSync(join(TARGET, 'scripts/with-timeout.sh'), 'utf8');
       return s.includes('kill -TERM') && s.includes('kill -KILL') && s.includes('exit 124');
     })()],
+  ['claude-tmux-run.sh exists and is executable',
+    (() => { try { return (statSync(join(TARGET, 'scripts/claude-tmux-run.sh')).mode & 0o111) !== 0; } catch { return false; } })()],
+  ['claude-tmux-run.sh has tmux + idle-poll + timeout semantics',
+    (() => {
+      const s = readFileSync(join(TARGET, 'scripts/claude-tmux-run.sh'), 'utf8');
+      return s.includes('tmux new-session')
+        && s.includes('paste-buffer')
+        && s.includes('capture-pane')
+        && s.includes('idle_streak')
+        && s.includes('exit 124');
+    })()],
+  ['cron/example-tmux.md present with BEGIN_RESULT marker convention',
+    (() => {
+      try {
+        const s = readFileSync(join(TARGET, 'cron/example-tmux.md'), 'utf8');
+        return s.includes('BEGIN_RESULT') && s.includes('END_RESULT');
+      } catch { return false; }
+    })()],
+  ['cron-example plist invokes claude-tmux-run.sh (not raw claude -p)',
+    (() => {
+      const s = readFileSync(join(TARGET, 'launchd/cron-example.plist'), 'utf8');
+      // Pull just the ProgramArguments command line; tolerate the comment
+      // block above it, which legitimately mentions `claude -p` for context.
+      const m = s.match(/<key>ProgramArguments<\/key>[\s\S]*?<\/array>/);
+      if (!m) return false;
+      const cmd = m[0];
+      return cmd.includes('claude-tmux-run.sh') && !/\bclaude\s+-p\b/.test(cmd);
+    })()],
+  ['systemd cron-example.service invokes claude-tmux-run.sh',
+    (() => {
+      const s = readFileSync(join(TARGET, 'systemd/cron-example.service'), 'utf8');
+      return s.includes('claude-tmux-run.sh');
+    })()],
   ['AGENTS.md carries Token Safety section',
     (() => {
       const s = readFileSync(join(TARGET, 'AGENTS.md'), 'utf8');
@@ -286,6 +319,11 @@ const checks = [
     (() => {
       const s = readFileSync(join(TARGET, 'AGENTS.md'), 'utf8');
       return s.includes('## Cron Safety') && s.includes('with-timeout.sh 1200') && s.includes('Stay strictly on-prompt');
+    })()],
+  ['AGENTS.md Cron Safety prefers claude-tmux-run.sh + flags June 15 billing split',
+    (() => {
+      const s = readFileSync(join(TARGET, 'AGENTS.md'), 'utf8');
+      return s.includes('claude-tmux-run.sh') && s.includes('2026-06-15') && s.includes('Agent SDK');
     })()],
   ['AGENTS.md Shell Safety bans find on ~/Library and wide pipes',
     (() => {

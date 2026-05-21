@@ -17,6 +17,13 @@
     Every cron's real work should be wrapped in scripts/with-timeout.sh so a
     misbehaving task can't hold the slot forever. 1200s (20 min) is the ceiling
     we found sane — not a target. See AGENTS.md "Cron Safety" for why.
+
+    Tasks that invoke `claude` itself: prefer `scripts/claude-tmux-run.sh
+    cron/<task>.md` over `claude -p`. Starting 2026-06-15 Anthropic splits Max
+    quota into separate Interactive + Agent SDK buckets — `claude -p` draws on
+    the smaller Agent SDK bucket at API rates, while the tmux-wrapped flow
+    stays in the Interactive bucket alongside normal sessions. See AGENTS.md
+    "Cron Safety" for the full rationale + the SDK-bucket cost math.
   -->
   <dict>
     <!-- Unique identifier — must match the filename (minus .plist) -->
@@ -24,12 +31,15 @@
     <string>com.hermit-agent.{{AGENT_NAME}}.EXAMPLE-TASK</string>
 
     <!-- The command. First entry is the binary, remaining are argv.
-         Wrap the real work in with-timeout.sh so runaway tasks self-terminate. -->
+         Wrap the real work in with-timeout.sh so runaway tasks self-terminate.
+         The example uses claude-tmux-run.sh + a prompt file under cron/ —
+         swap in your own helper script if the task is more involved
+         (preprocess data, parse the BEGIN_RESULT block, post-process). -->
     <key>ProgramArguments</key>
     <array>
       <string>/bin/bash</string>
       <string>-c</string>
-      <string>cd {{AGENT_DIR}} &amp;&amp; ./scripts/with-timeout.sh 1200 ./scripts/EXAMPLE-TASK.sh</string>
+      <string>cd {{AGENT_DIR}} &amp;&amp; ./scripts/with-timeout.sh 1200 ./scripts/claude-tmux-run.sh cron/example-tmux.md</string>
     </array>
 
     <!-- How often to run, in seconds. 600 = every 10 minutes. -->

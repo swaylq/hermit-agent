@@ -30,7 +30,12 @@ Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr
 # Make sure .claude/state/ exists before the task runs — many tasks write
 # state files there. Cheap to do unconditionally.
 ExecStartPre=/bin/mkdir -p {{AGENT_DIR}}/.claude/state
-ExecStart=/bin/bash -c 'cd {{AGENT_DIR}} && ./scripts/with-timeout.sh 1200 ./scripts/EXAMPLE-TASK.sh'
+# Prefer scripts/claude-tmux-run.sh over `claude -p` so the task stays in the
+# Claude Max Interactive billing bucket (separate from the Agent SDK bucket
+# `claude -p` draws against starting 2026-06-15). Replace cron/example-tmux.md
+# with your own prompt; swap in a wrapper script if the task needs pre/post
+# processing of the agent's output.
+ExecStart=/bin/bash -c 'cd {{AGENT_DIR}} && ./scripts/with-timeout.sh 1200 ./scripts/claude-tmux-run.sh cron/example-tmux.md'
 
 # Logs go to the systemd journal (default). View with:
 #   journalctl --user -u hermit-{{AGENT_NAME}}-cron-example.service -f
