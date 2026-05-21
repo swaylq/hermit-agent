@@ -23,7 +23,7 @@ CUSTOMIZE ME: edit IDENTITY.md and USER.md in my workspace, or fill the MISSION 
 
 WHERE I LIVE: {{AGENT_DIR}} on your Mac. My markdown files are my memory — they persist across restarts.
 
-DOCS: https://github.com/voidborne-d/hermit-agent
+DOCS: https://github.com/swaylq/hermit-agent
 
 ---
 

@@ -1,6 +1,6 @@
 {
   "name": "create-hermit-agent",
-  "version": "0.1.56",
+  "version": "0.1.57",
   "description": "Bootstrap a Telegram-connected Claude Code agent. Hermit-crab style — borrow the shell, bring your own body.",
   "type": "module",
   "bin": {
@@ -28,15 +28,15 @@
     "assistant",
     "hermit-crab"
   ],
-  "author": "voidborne-d",
+  "author": "swaylq",
   "license": "MIT",
-  "homepage": "https://github.com/voidborne-d/hermit-agent#readme",
+  "homepage": "https://github.com/swaylq/hermit-agent#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/voidborne-d/hermit-agent.git"
+    "url": "https://github.com/swaylq/hermit-agent.git"
   },
   "bugs": {
-    "url": "https://github.com/voidborne-d/hermit-agent/issues"
+    "url": "https://github.com/swaylq/hermit-agent/issues"
   },
   "files": [
     "bin/",
