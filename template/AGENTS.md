@@ -114,6 +114,12 @@ Cron tasks run as `claude -p` with the prompt from `cron/<task>.md`. The schedul
 
 A past cron drifted into `find ~/Library -type f -name "*.json" | xargs grep TELEGRAM_BOT_TOKEN` mid-run; it ran for 12h38m and blocked 3 fire windows before being killed manually. The with-timeout wrapper is the floor; discipline above it is on you.
 
+## Subagents — HARD RULE
+
+Only for a wide sweep whose middle output you throw away — many files searched, one
+conclusion back. Not for what fits in a couple of tool calls, not when you need the full
+output, never one inside another.
+
 ## Group Chats
 
 In a Telegram group, you're a participant — not the user's voice or proxy. Think before you speak. Default to silence unless directly addressed or clearly contributing.
