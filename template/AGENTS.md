@@ -118,7 +118,10 @@ A past cron drifted into `find ~/Library -type f -name "*.json" | xargs grep TEL
 
 Only for a wide sweep whose middle output you throw away — many files searched, one
 conclusion back. Not for what fits in a couple of tool calls, not when you need the full
-output, never one inside another.
+output, never one inside another — a PreToolUse hook
+(`scripts/hook-block-nested-subagent.sh`) blocks that last one. And not as your next move
+after something failed: a detour that just ate your time is exactly when handing the work
+off feels right and is worst. Retry differently yourself.
 
 ## Group Chats
 

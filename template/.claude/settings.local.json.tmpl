@@ -70,6 +70,15 @@
             "command": "{{AGENT_DIR}}/scripts/hook-block-askuserquestion.sh"
           }
         ]
+      },
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{AGENT_DIR}}/scripts/hook-block-nested-subagent.sh"
+          }
+        ]
       }
     ]
   }
